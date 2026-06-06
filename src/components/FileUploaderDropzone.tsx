@@ -1,8 +1,6 @@
 import React, { useState, useRef } from "react";
 import { Upload, FileText, CheckCircle, RefreshCw } from "lucide-react";
 
-import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-
 interface FileUploaderDropzoneProps {
   label: string;
   allowedExtensions: string[];
@@ -38,41 +36,41 @@ export default function FileUploaderDropzone({
     setUploadedFileName(file.name);
     
     try {
-      let extractedText = "";
-
-      if (extension === ".txt") {
-        extractedText = await file.text();
-      } else if (extension === ".docx") {
-        const mammoth = await import("mammoth");
-        const arrayBuffer = await file.arrayBuffer();
-        const result = await mammoth.extractRawText({ arrayBuffer });
-        extractedText = result.value || "";
-      } else if (extension === ".pdf") {
-        const pdfjs = await import("pdfjs-dist");
-        pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
-        const arrayBuffer = await file.arrayBuffer();
-        const uint8arr = new Uint8Array(arrayBuffer);
-        const doc = await pdfjs.getDocument({ data: uint8arr }).promise;
-        let fullText = "";
-        for (let i = 1; i <= doc.numPages; i++) {
-          const page = await doc.getPage(i);
-          const content = await page.getTextContent();
-          const pageText = content.items.map((item: any) => item.str).join(" ");
-          fullText += pageText + "\n";
-        }
-        extractedText = fullText.trim();
-      } else if ([".png", ".jpg", ".jpeg"].includes(extension)) {
-        const { createWorker } = await import("tesseract.js");
-        const worker = await createWorker("ind+eng");
-        const { data } = await worker.recognize(file);
-        await worker.terminate();
-        extractedText = data.text || "";
-      } else {
-        throw new Error("Tipe file tidak didukung.");
+      let mimeType = file.type;
+      if (!mimeType) {
+        if (file.name.endsWith(".pdf")) mimeType = "application/pdf";
+        else if (file.name.endsWith(".docx")) mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        else if (file.name.endsWith(".txt")) mimeType = "text/plain";
+        else if (file.name.endsWith(".png")) mimeType = "image/png";
+        else if (file.name.endsWith(".jpg") || file.name.endsWith(".jpeg")) mimeType = "image/jpeg";
       }
 
-      if (extractedText.trim()) {
-        onTextExtracted(extractedText.trim(), file.name);
+      const reader = new FileReader();
+      const base64Promise = new Promise<string>((resolve, reject) => {
+        reader.readAsDataURL(file);
+        reader.onload = () => {
+          const base64String = (reader.result as string).split(",")[1];
+          resolve(base64String);
+        };
+        reader.onerror = (error) => reject(error);
+      });
+
+      const fileBase64 = await base64Promise;
+
+      const response = await fetch("/api/extract-text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileBase64, mimeType }),
+      });
+
+      if (!response.ok) {
+        const errJson = await response.json();
+        throw new Error(errJson.error || "Gagal memproses berkas");
+      }
+
+      const resData = await response.json();
+      if (resData.success && resData.text) {
+        onTextExtracted(resData.text, file.name);
       } else {
         throw new Error("Tidak ada teks yang dapat diekstrak.");
       }

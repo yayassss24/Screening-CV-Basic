@@ -2,10 +2,9 @@
   "version": 2,
   "installCommand": "npm install",
   "buildCommand": "vite build",
-  "outputDirectory": "dist",
   "routes": [
     { "src": "/api/(.*)", "dest": "api/index.ts" },
-    { "handle": "filesystem" },
-    { "src": "/(.*)", "dest": "/index.html" }
+    { "src": "/assets/(.*)", "dest": "/dist/assets/$1" },
+    { "src": "/(.*)", "dest": "/dist/index.html" }
   ]
 }

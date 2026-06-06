@@ -2,19 +2,10 @@
   "version": 2,
   "installCommand": "npm install",
   "buildCommand": "vite build",
-  "builds": [
-    {
-      "src": "api/index.ts",
-      "use": "@vercel/node"
-    },
-    {
-      "src": "dist/**",
-      "use": "@vercel/static"
-    }
-  ],
+  "outputDirectory": "dist",
   "routes": [
     { "src": "/api/(.*)", "dest": "api/index.ts" },
-    { "src": "/(.*)\\.(js|css|svg|png|jpg|jpeg|gif|ico|json|webp|woff2?|ttf|eot|mp4|webm|wasm|mjs)", "dest": "/dist/$1.$2" },
-    { "src": "/(.*)", "dest": "/dist/index.html" }
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }

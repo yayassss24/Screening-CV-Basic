@@ -50,7 +50,9 @@ const PORT = 3000;
 app.use(express.json({ limit: "20mb" }));
 
 // Initialize the local JSON Database path inside the project root
-const DB_PATH = path.join(process.cwd(), "db.json");
+const DB_PATH = process.env.VERCEL
+  ? path.join("/tmp", "db.json")
+  : path.join(process.cwd(), "db.json");
 
 interface UserProfile {
   email: string;
@@ -1819,9 +1821,19 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server JagoCV AI berjalan lancar di http://localhost:${PORT}`);
-  });
+  // Only start listening when run directly (not on Vercel serverless)
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server JagoCV AI berjalan lancar di http://localhost:${PORT}`);
+    });
+  }
+}
+
+// Warm up db.json on Vercel cold start
+if (process.env.VERCEL) {
+  initDatabase().catch(() => {});
 }
 
 startServer();
+
+export default app;

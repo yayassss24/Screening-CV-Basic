@@ -1,10 +1,14 @@
 {
   "version": 2,
   "installCommand": "npm install",
-  "buildCommand": "vite build",
+  "buildCommand": "vite build && mkdir -p api/static && cp -r dist/. api/static/",
+  "builds": [
+    {
+      "src": "api/index.ts",
+      "use": "@vercel/node"
+    }
+  ],
   "routes": [
-    { "src": "/api/(.*)", "dest": "api/index.ts" },
-    { "src": "/assets/(.*)", "dest": "/dist/assets/$1" },
-    { "src": "/(.*)", "dest": "/dist/index.html" }
+    { "src": "/(.*)", "dest": "api/index.ts" }
   ]
 }

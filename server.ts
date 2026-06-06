@@ -1807,7 +1807,9 @@ JD: ${jobDescription.slice(0, 1500)}
 // Serve static assets in production, setup Vite middleware in development
 async function startServer() {
   if (process.env.VERCEL || process.env.NODE_ENV === "production") {
-    const distPath = path.join(process.cwd(), "dist");
+    const distPath = process.env.VERCEL
+      ? path.join(process.cwd(), "api", "static")
+      : path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));

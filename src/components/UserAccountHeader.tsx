@@ -1,34 +1,24 @@
 import React, { useState } from "react";
 import { UserProfile } from "../types";
-import { User, Shield, CreditCard, Gift, Key, Check } from "lucide-react";
+import { User, Shield, CreditCard, Key, Check } from "lucide-react";
 import { motion } from "motion/react";
 
 interface UserAccountHeaderProps {
   profile: UserProfile;
-  onChangeEmail: (email: string) => void;
+  username: string;
   onActivateCode: (code: string) => Promise<{ success: boolean; message: string; status?: string }>;
-  onBuySimulate?: (packet: "BASIC" | "PRO") => void;
-  onSelectPaket: (paket: "TRIAL" | "BASIC" | "PRO") => void;
+  onSelectPaket: (paket: "BASIC" | "PRO") => void;
 }
 
 export default function UserAccountHeader({
   profile,
-  onChangeEmail,
+  username,
   onActivateCode,
   onSelectPaket,
 }: UserAccountHeaderProps) {
-  const [isEditingEmail, setIsEditingEmail] = useState(false);
-  const [tempEmail, setTempEmail] = useState(profile.email);
   const [activationCode, setActivationCode] = useState("");
   const [activationMsg, setActivationMsg] = useState<{ type: "success" | "error"; text: string; status?: string } | null>(null);
   const [isSubmittingCode, setIsSubmittingCode] = useState(false);
-
-  const handleSaveEmail = () => {
-    if (tempEmail.trim() && tempEmail.includes("@")) {
-      onChangeEmail(tempEmail.trim().toLowerCase());
-      setIsEditingEmail(false);
-    }
-  };
 
   const handleActivate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,63 +53,39 @@ export default function UserAccountHeader({
           </div>
           <div className="min-w-0">
             <div className="text-[9px] md:text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-0.5 md:mb-1">Akun Pengguna</div>
-            {isEditingEmail ? (
-              <div className="flex items-center gap-1.5 md:gap-2 flex-wrap">
-                <input
-                  type="email"
-                  value={tempEmail}
-                  onChange={(e) => setTempEmail(e.target.value)}
-                  className="bg-white border border-slate-200 text-slate-900 text-sm md:text-xs rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-blue-500 p-2 w-full md:w-60 outline-hidden font-mono"
-                />
-                <button
-                  onClick={handleSaveEmail}
-                  className="bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-900 transition-colors cursor-pointer"
-                >
-                  Simpan
-                </button>
-                <button
-                  onClick={() => {
-                    setTempEmail(profile.email);
-                    setIsEditingEmail(false);
-                  }}
-                  className="text-slate-400 hover:text-slate-600 text-xs px-2 font-semibold"
-                >
-                  Batal
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5 md:gap-2 flex-wrap">
-                <span className="font-bold text-slate-800 text-sm md:text-base truncate max-w-[180px] md:max-w-none">{profile.email}</span>
-                <button
-                  onClick={() => setIsEditingEmail(true)}
-                  className="text-blue-600 hover:text-blue-800 text-xs ml-1 font-semibold hover:underline"
-                >
-                  Ubah Email
-                </button>
-              </div>
-            )}
+            <div className="flex items-center gap-1.5 md:gap-2 flex-wrap">
+              <span className="font-bold text-slate-800 text-sm md:text-base truncate max-w-[180px] md:max-w-none">
+                @{username || "guest"}
+              </span>
+            </div>
 
             {/* Badge & Quota */}
             <div className="flex items-center gap-2 md:gap-3 mt-1.5 md:mt-2 flex-wrap">
-              <span
-                className={`inline-flex items-center gap-1 px-2 md:px-3 py-0.5 md:py-1 rounded-full text-[9px] md:text-[10px] font-bold uppercase tracking-wider border ${
-                  profile.paket === "PRO"
-                    ? "bg-blue-100 text-blue-700 border-blue-200"
-                    : profile.paket === "BASIC"
-                    ? "bg-slate-100 text-slate-800 border-slate-200"
-                    : "bg-slate-100 text-slate-500 border-slate-200"
-                }`}
-              >
-                <Shield className="w-2.5 h-2.5 md:w-3 md:h-3" />
-                {profile.paket}
-              </span>
+              {profile.paket && (
+                <span
+                  className={`inline-flex items-center gap-1 px-2 md:px-3 py-0.5 md:py-1 rounded-full text-[9px] md:text-[10px] font-bold uppercase tracking-wider border ${
+                    profile.paket === "PRO"
+                      ? "bg-blue-100 text-blue-700 border-blue-200"
+                      : profile.paket === "BASIC"
+                      ? "bg-slate-100 text-slate-800 border-slate-200"
+                      : "bg-slate-100 text-slate-500 border-slate-200"
+                  }`}
+                >
+                  <Shield className="w-2.5 h-2.5 md:w-3 md:h-3" />
+                  {profile.paket || "NONE"}
+                </span>
+              )}
 
-              <span className="text-[10px] md:text-xs text-slate-500">
-                Sisa:{" "}
-                <strong className={`font-bold ${profile.screeningSisa === "Unlimited" ? "text-blue-600" : "text-slate-800"}`}>
-                  {profile.screeningSisa}
-                </strong>
-              </span>
+              {profile.paket ? (
+                <span className="text-[10px] md:text-xs text-slate-500">
+                  Sisa:{" "}
+                  <strong className={`font-bold ${profile.screeningSisa === "Unlimited" ? "text-blue-600" : "text-slate-800"}`}>
+                    {profile.screeningSisa}
+                  </strong>
+                </span>
+              ) : (
+                <span className="text-[10px] md:text-xs text-slate-400 italic">Belum memiliki paket</span>
+              )}
 
               {profile.tanggalBerlaku && (
                 <span className="text-[10px] md:text-xs text-slate-400 italic">
@@ -134,11 +100,11 @@ export default function UserAccountHeader({
         <div className="bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl p-3 md:p-4 flex flex-col sm:flex-row items-start sm:items-center gap-2 md:gap-4">
           <div className="hidden sm:block space-y-0.5 md:space-y-1">
             <h4 className="text-[9px] md:text-[10px] font-extrabold uppercase tracking-widest text-slate-500">Pilih Paket</h4>
-            <p className="text-[9px] md:text-[10.5px] text-slate-400 font-medium">Uji coba semua fitur secara langsung tanpa kode / biaya</p>
+            <p className="text-[9px] md:text-[10.5px] text-slate-400 font-medium">Aktifkan fitur lengkap JagoCV</p>
           </div>
 
           <div className="flex bg-slate-200/60 p-0.5 md:p-1 rounded-lg md:rounded-xl border border-slate-200/40 gap-1 shrink-0 align-middle w-full sm:w-auto">
-            {(["TRIAL", "BASIC", "PRO"] as const).map((t) => {
+            {(["BASIC", "PRO"] as const).map((t) => {
               const isActive = profile.paket === t;
               return (
                 <button
@@ -148,9 +114,7 @@ export default function UserAccountHeader({
                     isActive
                       ? t === "PRO"
                         ? "bg-blue-600 text-white shadow-sm"
-                        : t === "BASIC"
-                        ? "bg-slate-800 text-white shadow-sm"
-                        : "bg-slate-500 text-white shadow-sm"
+                        : "bg-slate-800 text-white shadow-sm"
                       : "text-slate-500 hover:text-slate-800 hover:bg-slate-200/40"
                   }`}
                 >
@@ -159,8 +123,44 @@ export default function UserAccountHeader({
               );
             })}
           </div>
+
+          {activationCode !== undefined && (
+            <form onSubmit={handleActivate} className="flex items-center gap-1.5 md:gap-2 w-full sm:w-auto">
+              <div className="relative flex-1 sm:flex-none">
+                <Key className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
+                <input
+                  type="text"
+                  value={activationCode}
+                  onChange={(e) => setActivationCode(e.target.value.toUpperCase())}
+                  placeholder="Kode Aktivasi"
+                  className="w-full sm:w-44 bg-white border border-slate-200 text-slate-900 text-[10px] rounded-lg pl-7 pr-2 py-1.5 outline-hidden focus:ring-1 focus:ring-blue-500 focus:border-blue-500 font-mono"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isSubmittingCode || !activationCode.trim()}
+                className="bg-slate-800 hover:bg-slate-900 text-white font-bold px-2.5 py-1.5 rounded-lg text-[10px] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+              >
+                {isSubmittingCode ? "..." : "Aktifkan"}
+              </button>
+            </form>
+          )}
         </div>
 
+        {activationMsg && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className={`text-[10px] font-bold px-3 py-2 rounded-lg ${
+              activationMsg.type === "success"
+                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                : "bg-red-50 text-red-700 border border-red-200"
+            }`}
+          >
+            {activationMsg.type === "success" ? <Check className="w-3 h-3 inline mr-1" /> : null}
+            {activationMsg.text}
+          </motion.div>
+        )}
       </div>
     </div>
   );

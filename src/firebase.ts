@@ -1,22 +1,35 @@
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updateProfile } from "firebase/auth";
 import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
 import firebaseConfig from "../firebase-applet-config.json";
 
-// Initialize Firebase App
 const app = initializeApp(firebaseConfig);
 
-// Initialize Services
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId || "(default)");
 export const auth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider();
 
-// Standard handle for popups signing
-export async function signInWithGoogle() {
-  return signInWithPopup(auth, googleProvider);
+const APP_DOMAIN = "jagocv.app";
+
+function usernameToEmail(username: string): string {
+  return `${username.toLowerCase().trim()}@${APP_DOMAIN}`;
 }
 
-// Log out helper
+export function emailToUsername(email: string): string {
+  return email.replace(`@${APP_DOMAIN}`, "");
+}
+
+export async function registerWithUsername(username: string, password: string) {
+  const email = usernameToEmail(username);
+  const cred = await createUserWithEmailAndPassword(auth, email, password);
+  await updateProfile(cred.user, { displayName: username });
+  return cred;
+}
+
+export async function loginWithUsername(username: string, password: string) {
+  const email = usernameToEmail(username);
+  return signInWithEmailAndPassword(auth, email, password);
+}
+
 export async function logOut() {
   return signOut(auth);
 }

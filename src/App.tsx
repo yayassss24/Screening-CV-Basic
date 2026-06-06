@@ -39,10 +39,11 @@ import {
   setDoc,
   getDoc
 } from "firebase/firestore";
-import { auth, signInWithGoogle, logOut, db } from "./firebase";
+import { auth, logOut, db, emailToUsername } from "./firebase";
 import { JagoCVAnalysisResult, UserProfile, SavedAnalysis } from "./types";
 import UserAccountHeader from "./components/UserAccountHeader";
 import FileUploaderDropzone from "./components/FileUploaderDropzone";
+import AuthModal from "./components/AuthModal";
 import { QRCodeSVG, QRCodeCanvas } from "qrcode.react";
 
 // Template Candidates for quick preview
@@ -206,10 +207,11 @@ function buildQRIS(nominal?: number): string {
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [profile, setProfile] = useState<UserProfile>({
     email: "",
-    paket: "TRIAL",
-    screeningSisa: 3,
+    paket: "",
+    screeningSisa: 0,
     screeningTotalCount: 0,
   });
 
@@ -236,7 +238,7 @@ export default function App() {
   const [resendStatusMsg, setResendStatusMsg] = useState<string | null>(null);
   const [activePaymentModal, setActivePaymentModal] = useState<{
     id: string;
-    paket: "BASIC" | "PRO" | "TRIAL";
+    paket: "BASIC" | "PRO";
     nominal: number;
     status: string;
   } | null>(null);
@@ -271,7 +273,7 @@ export default function App() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [csNamaLengkap, setCsNamaLengkap] = useState("");
   const [csEmailAktif, setCsEmailAktif] = useState("");
-  const [csSelectedPackage, setCsSelectedPackage] = useState<"BASIC" | "TRIAL" | "PRO" | null>(null);
+  const [csSelectedPackage, setCsSelectedPackage] = useState<"BASIC" | "PRO" | null>(null);
   const [csScreenshotBase64, setCsScreenshotBase64] = useState<string | null>(null);
   const [csScreenshotMime, setCsScreenshotMime] = useState("image/png");
   const [csScreenshotName, setCsScreenshotName] = useState("");
@@ -279,7 +281,7 @@ export default function App() {
   const [csChatLogs, setCsChatLogs] = useState<Array<{ sender: "user" | "bot"; text: string; image?: string; timestamp: Date }>>([
     {
       sender: "bot" as const,
-      text: "Halo! Saya adalah AI Customer Service dan Payment Assistant untuk layanan JagoCV AI Screening CV.\n\nSilakan pilih paket yang ingin Anda gunakan:\n\n1. Basic\n2. Trial\n3. Pro",
+      text: "Halo! Saya adalah AI Customer Service dan Payment Assistant untuk layanan JagoCV AI Screening CV.\n\nSilakan pilih paket yang ingin Anda gunakan:\n\n1. Basic (Rp25.000)\n2. Pro (Rp65.000)",
       timestamp: new Date()
     }
   ]);
@@ -290,9 +292,9 @@ export default function App() {
     }
   }, [currentUser, profile.email]);
 
-  const handleCsSelectPackage = (paket: "BASIC" | "TRIAL" | "PRO") => {
+  const handleCsSelectPackage = (paket: "BASIC" | "PRO") => {
     setCsSelectedPackage(paket);
-    const nominal = paket === "PRO" ? 65000 : paket === "BASIC" ? 25000 : 10000;
+    const nominal = paket === "PRO" ? 65000 : 25000;
     const updatedLogs = [
       ...csChatLogs,
       {
@@ -432,7 +434,7 @@ export default function App() {
     setCsChatLogs([
       {
         sender: "bot" as const,
-        text: "Halo! Saya adalah AI Customer Service dan Payment Assistant untuk JagoCV AI Screening CV.\n\nSilakan pilih paket yang ingin Anda gunakan:\n\n1. Basic\n2. Trial\n3. Pro",
+        text: "Halo! Saya adalah AI Customer Service dan Payment Assistant untuk JagoCV AI Screening CV.\n\nSilakan pilih paket yang ingin Anda gunakan:\n\n1. Basic (Rp25.000)\n2. Pro (Rp65.000)",
         timestamp: new Date()
       }
     ]);
@@ -544,21 +546,17 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setCurrentUser(user);
-        // Sync & retrieve/create profile from node backend
         const email = user.email || "";
         if (email) {
           await fetchProfile(email);
         }
       } else {
         setCurrentUser(null);
-        setProfile(prev => {
-          if (prev.email && prev.email !== "yahyasyarofuddin09@gmail.com") return prev;
-          return {
-            email: "",
-            paket: "TRIAL",
-            screeningSisa: 3,
-            screeningTotalCount: 0,
-          };
+        setProfile({
+          email: "",
+          paket: "",
+          screeningSisa: 0,
+          screeningTotalCount: 0,
         });
       }
     });
@@ -654,28 +652,24 @@ export default function App() {
     await fetchProfile(newEmail);
   };
 
-  // Google Login click UI
-  const handleGoogleSignIn = async () => {
-    try {
-      setErrorMsg(null);
-      await signInWithGoogle();
-    } catch (err: any) {
-      setErrorMsg(`Gagal login Google Auth: ${err.message}`);
-    }
-  };
-
   const handleSignOut = async () => {
     try {
       await logOut();
       setProfile({
         email: "",
-        paket: "TRIAL",
-        screeningSisa: 3,
+        paket: "",
+        screeningSisa: 0,
         screeningTotalCount: 0,
       });
     } catch (err: any) {
       setErrorMsg(`Gagal logout: ${err.message}`);
     }
+  };
+
+  const getUsername = () => {
+    if (currentUser?.displayName) return currentUser.displayName;
+    if (currentUser?.email) return emailToUsername(currentUser.email);
+    return "";
   };
 
   // Handle template loader
@@ -709,7 +703,7 @@ export default function App() {
     }
   };
 
-  const handleSelectPaket = async (paket: "TRIAL" | "BASIC" | "PRO") => {
+  const handleSelectPaket = async (paket: "BASIC" | "PRO") => {
     try {
       const activeEmail = currentUser?.email || profile.email;
       const response = await fetch("/api/profile/select-paket", {
@@ -726,12 +720,8 @@ export default function App() {
     }
   };
 
-  const handlePackageClick = (paket: "TRIAL" | "BASIC" | "PRO") => {
-    if (paket === "TRIAL") {
-      handleSelectPaket(paket);
-    } else {
-      setShowPackageModal(paket);
-    }
+  const handlePackageClick = (paket: "BASIC" | "PRO") => {
+    setShowPackageModal(paket);
   };
 
   const handleOpenCSChat = (paket: "BASIC" | "PRO") => {
@@ -775,7 +765,7 @@ export default function App() {
   };
 
   // Initiate QRIS payment gateway
-  const handleBuySimulate = async (paket: "BASIC" | "PRO" | "TRIAL") => {
+  const handleBuySimulate = async (paket: "BASIC" | "PRO") => {
     try {
       setErrorMsg(null);
       setResendStatusMsg(null);
@@ -1736,16 +1726,12 @@ export default function App() {
           <div className="flex items-center gap-1.5 md:gap-4 shrink-0">
             {currentUser ? (
               <div className="flex items-center gap-3 bg-slate-50 p-2 rounded-lg border border-slate-200">
-                {currentUser.photoURL ? (
-                  <img src={currentUser.photoURL} alt="Foto Profil" className="w-7 h-7 rounded-full border border-slate-300" />
-                ) : (
-                  <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold font-mono">
-                    {currentUser.email?.charAt(0).toUpperCase()}
-                  </div>
-                )}
+                <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold font-mono">
+                  {getUsername().charAt(0).toUpperCase()}
+                </div>
                 <div className="text-left text-xs">
-                  <p className="font-bold text-slate-800 max-w-[150px] truncate">{currentUser.displayName || currentUser.email}</p>
-                  <p className="text-[10px] text-slate-400">Google Verified</p>
+                  <p className="font-bold text-slate-800 max-w-[150px] truncate">@{getUsername()}</p>
+                  <p className="text-[10px] text-slate-400">Terdaftar</p>
                 </div>
                 <button
                   onClick={handleSignOut}
@@ -1756,11 +1742,10 @@ export default function App() {
               </div>
             ) : (
               <button
-                onClick={handleGoogleSignIn}
-                className="flex items-center gap-2 bg-white text-slate-800 hover:bg-slate-50 px-3.5 py-2 rounded-lg font-bold text-xs border border-slate-200 transition-colors shadow-xs cursor-pointer"
+                onClick={() => setShowAuthModal(true)}
+                className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 px-3.5 py-2 rounded-lg font-bold text-xs transition-colors shadow-xs cursor-pointer"
               >
-                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/shinydemos/google_button.svg" alt="Google" className="w-4 h-4" />
-                Masuk via Google
+                Masuk / Daftar
               </button>
             )}
           </div>
@@ -1770,7 +1755,7 @@ export default function App() {
       {/* Activated tier & profile headers */}
       <UserAccountHeader 
         profile={profile}
-        onChangeEmail={handleEmailChange}
+        username={getUsername()}
         onActivateCode={handleActivateCode}
         onSelectPaket={handlePackageClick}
       />
@@ -2841,6 +2826,13 @@ export default function App() {
         </div>
       )}
 
+      {showAuthModal && (
+        <AuthModal
+          onClose={() => setShowAuthModal(false)}
+          onError={(msg) => setErrorMsg(msg)}
+        />
+      )}
+
       {/* Floating Support Assistant Widget */}
       <div className="fixed bottom-0 md:bottom-6 inset-x-0 md:inset-x-auto md:right-6 z-50 flex flex-col items-end gap-3 font-sans">
         {/* Toggle Chat Balloon */}
@@ -2905,7 +2897,7 @@ export default function App() {
                           <p className="text-[7.5px] font-black tracking-tighter text-slate-800 mb-1">QRIS OFFICIAL MERCHANT</p>
                           {csSelectedPackage && (
                             <div className="my-1.5 bg-rose-50 text-rose-700 px-2.5 py-1 rounded-md text-[9.5px] font-black font-mono tracking-wide border border-rose-200 text-center inline-block">
-                              Rp {(csSelectedPackage === "PRO" ? 65000 : csSelectedPackage === "BASIC" ? 25000 : 10000).toLocaleString("id-ID")}
+                              Rp {(csSelectedPackage === "PRO" ? 65000 : 25000).toLocaleString("id-ID")}
                             </div>
                           )}
                           <img
@@ -2944,17 +2936,10 @@ export default function App() {
                     <span className="text-slate-400">Rp25.000</span>
                   </button>
                   <button
-                    onClick={() => handleCsSelectPackage("TRIAL")}
-                    className="w-full text-left bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 px-3 rounded-lg border border-slate-700 hover:border-slate-500 cursor-pointer transition-all hover:translate-x-1 duration-150 text-[10.5px] flex justify-between"
-                  >
-                    <span>2. Paket Trial</span>
-                    <span className="text-sky-400">Rp10.000</span>
-                  </button>
-                  <button
                     onClick={() => handleCsSelectPackage("PRO")}
                     className="w-full text-left bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 px-3 rounded-lg border border-slate-700 hover:border-slate-500 cursor-pointer transition-all hover:translate-x-1 duration-150 text-[10.5px] flex justify-between"
                   >
-                    <span>3. Paket Pro</span>
+                    <span>2. Paket Pro</span>
                     <span className="text-emerald-400">Rp65.000</span>
                   </button>
                 </div>

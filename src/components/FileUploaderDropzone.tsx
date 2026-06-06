@@ -8,6 +8,43 @@ interface FileUploaderDropzoneProps {
   onError: (errors: string) => void;
 }
 
+async function extractDocxText(file: File): Promise<string> {
+  const JSZip = (await import("jszip")).default;
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const docFile = zip.file("word/document.xml");
+  if (!docFile) throw new Error("word/document.xml tidak ditemukan di DOCX");
+  const xml = await docFile.async("text");
+  const texts: string[] = [];
+  const regex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+  let match;
+  while ((match = regex.exec(xml)) !== null) {
+    texts.push(match[1]);
+  }
+  return texts.join(" ").replace(/\s+/g, " ").trim();
+}
+
+async function extractPdfText(file: File): Promise<string> {
+  const { getDocument, GlobalWorkerOptions } = await import("pdfjs-dist");
+  GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.9.155/pdf.worker.min.mjs";
+  const doc = await getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  let fullText = "";
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    fullText += content.items.map((item: any) => item.str).join(" ") + "\n";
+  }
+  return fullText.trim();
+}
+
+async function extractImageText(file: File): Promise<string> {
+  const { createWorker } = await import("tesseract.js");
+  const worker = await createWorker("ind+eng");
+  const { data } = await worker.recognize(file);
+  await worker.terminate();
+  return data.text || "";
+}
+
 export default function FileUploaderDropzone({
   label,
   allowedExtensions,
@@ -36,41 +73,22 @@ export default function FileUploaderDropzone({
     setUploadedFileName(file.name);
     
     try {
-      let mimeType = file.type;
-      if (!mimeType) {
-        if (file.name.endsWith(".pdf")) mimeType = "application/pdf";
-        else if (file.name.endsWith(".docx")) mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-        else if (file.name.endsWith(".txt")) mimeType = "text/plain";
-        else if (file.name.endsWith(".png")) mimeType = "image/png";
-        else if (file.name.endsWith(".jpg") || file.name.endsWith(".jpeg")) mimeType = "image/jpeg";
+      let text = "";
+
+      if (extension === ".txt") {
+        text = await file.text();
+      } else if (extension === ".docx") {
+        text = await extractDocxText(file);
+      } else if (extension === ".pdf") {
+        text = await extractPdfText(file);
+      } else if ([".png", ".jpg", ".jpeg"].includes(extension)) {
+        text = await extractImageText(file);
+      } else {
+        throw new Error("Tipe berkas tidak didukung");
       }
 
-      const reader = new FileReader();
-      const base64Promise = new Promise<string>((resolve, reject) => {
-        reader.readAsDataURL(file);
-        reader.onload = () => {
-          const base64String = (reader.result as string).split(",")[1];
-          resolve(base64String);
-        };
-        reader.onerror = (error) => reject(error);
-      });
-
-      const fileBase64 = await base64Promise;
-
-      const response = await fetch("/api/extract-text", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileBase64, mimeType }),
-      });
-
-      if (!response.ok) {
-        const errJson = await response.json();
-        throw new Error(errJson.error || "Gagal memproses berkas");
-      }
-
-      const resData = await response.json();
-      if (resData.success && resData.text) {
-        onTextExtracted(resData.text, file.name);
+      if (text) {
+        onTextExtracted(text, file.name);
       } else {
         throw new Error("Tidak ada teks yang dapat diekstrak.");
       }

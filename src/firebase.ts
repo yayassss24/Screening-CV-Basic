@@ -3,9 +3,14 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, si
 import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
 import firebaseConfig from "../firebase-applet-config.json";
 
-const app = initializeApp(firebaseConfig);
+const config = {
+  ...firebaseConfig,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey,
+};
 
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId || "(default)");
+const app = initializeApp(config);
+
+export const db = getFirestore(app, config.firestoreDatabaseId || "(default)");
 export const auth = getAuth(app);
 
 const APP_DOMAIN = "jagocv.app";

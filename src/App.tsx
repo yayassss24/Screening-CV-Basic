@@ -1847,7 +1847,7 @@ export default function App() {
                 </div>
                       <FileUploaderDropzone
                   label="Unggah Dokumen CV / Resume"
-                  allowedExtensions={[".pdf", ".docx", ".txt"]}
+                  allowedExtensions={[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg"]}
                   onTextExtracted={(text, filename) => {
                     if (text) {
                       setCvText(text);
@@ -1876,7 +1876,7 @@ export default function App() {
 
                 <FileUploaderDropzone
                   label="Unggah Dokumen Informasi Lowongan"
-                  allowedExtensions={[".pdf", ".docx", ".txt"]}
+                  allowedExtensions={[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg"]}
                   onTextExtracted={(text) => {
                     setJobDescription(text || "");
                   }}
@@ -1901,7 +1901,7 @@ export default function App() {
                   <div className="p-3 border-t border-slate-200 flex flex-col gap-2">
                     <FileUploaderDropzone
                       label="Unggah Dokumen Cover Letter"
-                      allowedExtensions={[".pdf", ".docx", ".txt"]}
+                      allowedExtensions={[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg"]}
                       onTextExtracted={(text) => {
                         setCoverLetter(text || "");
                       }}

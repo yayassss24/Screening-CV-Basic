@@ -1,5 +1,7 @@
 import React, { useState, useRef } from "react";
-import { Upload, FileText, CheckCircle, AlertCircle, RefreshCw } from "lucide-react";
+import { Upload, FileText, CheckCircle, RefreshCw } from "lucide-react";
+
+import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 interface FileUploaderDropzoneProps {
   label: string;
@@ -47,8 +49,7 @@ export default function FileUploaderDropzone({
         extractedText = result.value || "";
       } else if (extension === ".pdf") {
         const pdfjs = await import("pdfjs-dist");
-        const version = pdfjs.version;
-        pdfjs.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${version}/build/pdf.worker.min.mjs`;
+        pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
         const arrayBuffer = await file.arrayBuffer();
         const uint8arr = new Uint8Array(arrayBuffer);
         const doc = await pdfjs.getDocument({ data: uint8arr }).promise;
@@ -61,15 +62,19 @@ export default function FileUploaderDropzone({
         }
         extractedText = fullText.trim();
       } else if ([".png", ".jpg", ".jpeg"].includes(extension)) {
-        throw new Error("Ekstraksi teks dari gambar tidak didukung. Gunakan file PDF, DOCX, atau TXT.");
+        const { createWorker } = await import("tesseract.js");
+        const worker = await createWorker("ind+eng");
+        const { data } = await worker.recognize(file);
+        await worker.terminate();
+        extractedText = data.text || "";
       } else {
-        throw new Error("Tipe file tidak didukung untuk ekstraksi otomatis.");
+        throw new Error("Tipe file tidak didukung.");
       }
 
       if (extractedText.trim()) {
         onTextExtracted(extractedText.trim(), file.name);
       } else {
-        throw new Error("Tidak ada teks yang dapat diekstrak. Pastikan file berisi teks.");
+        throw new Error("Tidak ada teks yang dapat diekstrak.");
       }
     } catch (err: any) {
       console.error("File extraction failed:", err);

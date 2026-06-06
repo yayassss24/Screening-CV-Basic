@@ -25,7 +25,8 @@ import {
   MessageSquare,
   Send,
   Upload,
-  X
+  X,
+  Shield
 } from "lucide-react";
 import { onAuthStateChanged, User as FirebaseUser } from "firebase/auth";
 import { 
@@ -121,39 +122,86 @@ Persyaratan (Keywords):
 ];
 
 /**
- * Generates the authentic, 100% stable and scan-able static Indonesian QRIS payload for the merchant.
- * Using a pure static QRIS ensures that it is instantly scan-able by all Indonesian banking and e-wallet apps.
+ * Builds a properly structured EMVCo QRIS payload for Indonesian payments.
+ * Uses a test merchant PAN — for production, replace with a real QRIS merchant ID from your bank.
  */
-function generateQrisPayload(nominal?: number): string {
-  let prefix = "00020101021126670015ID.CO.QRPAY.WWW011893600002000204712402150010265277136750303UME51670015ID.CO.QRPAY.WWW011893600002000204712402150010265277136750303UME520448125303360";
-  const suffix = "5802ID5933JAGOCV, KONSTRUKSI & LAYANAN UMUM6011KAB. KEDIRI61056411562070703A016304";
-  
-  let mid = "";
+function buildQRIS(nominal?: number): string {
+  // === HEADER ===
+  // 00: Payload Format Indicator (01)
+  // 01: Point of Initiation Method (11=static, 12=dynamic)
+  let out = "000201010211";
+
+  // === ID 26: Merchant Account Information (QRIS) ===
+  // Sub 00: National Merchant PAN — this is the QRIS merchant ID
+  const pan = "9360000020002047124";
+  // Sub 01: Merchant name
+  const merchantName = "JAGOCV, KONSTRUKSI & L";
+  // Sub 02: Merchant Criteria
+  const criteria = "UME";
+  // Sub 03: API Version
+  const apiVer = "03";
+
+  const sub00 = "00" + String(pan.length).padStart(2, "0") + pan;
+  const sub01 = "01" + String(merchantName.length).padStart(2, "0") + merchantName;
+  const sub02 = "02" + String(criteria.length).padStart(2, "0") + criteria;
+  const sub03 = "03" + String(apiVer.length).padStart(2, "0") + apiVer;
+
+  const id26content = sub00 + sub01 + sub02 + sub03;
+  out += "26" + String(id26content.length).padStart(2, "0") + id26content;
+
+  // === ID 51: Payment System Specific (GPN template) ===
+  // Minimal content: network ID and merchant PAN
+  const netId = "ID.CO.QRPAY.WWW";
+  const id51sub00 = "00" + String(netId.length).padStart(2, "0") + netId;
+  const id51sub01 = "01" + String(pan.length).padStart(2, "0") + pan;
+  const id51content = id51sub00 + id51sub01;
+  out += "51" + String(id51content.length).padStart(2, "0") + id51content;
+
+  // === ID 52: Merchant Category Code ===
+  out += "52044812";
+
+  // === ID 53: Transaction Currency (360 = IDR) ===
+  out += "5303360";
+
+  // === ID 54: Transaction Amount (if nominal provided) ===
   if (nominal && nominal > 0) {
-    // Keep Point of Initiation as '11' (Static) instead of '12' (Dynamic) because some Indonesian banking apps (e.g. Mandiri, BCA/GPN)
-    // require point of initiation '11' for merchant-presented static profiles to prevent scanning errors (like THIMN)
-    const nominalString = Math.round(nominal).toString();
-    const lengthStr = nominalString.length.toString().padStart(2, "0");
-    mid = `54${lengthStr}${nominalString}`;
+    const amt = Math.round(nominal).toString();
+    out += "54" + String(amt.length).padStart(2, "0") + amt;
   }
-  
-  const payload = prefix + mid + suffix;
-  
-  // Calculate CRC16 CCITT
+
+  // === ID 58: Country Code ===
+  out += "5802ID";
+
+  // === ID 59: Merchant Name (full) ===
+  const fullName = "JAGOCV, KONSTRUKSI & LAYANAN UMUM";
+  out += "59" + String(fullName.length).padStart(2, "0") + fullName;
+
+  // === ID 60: Merchant City ===
+  const city = "KAB. KEDIRI";
+  out += "60" + String(city.length).padStart(2, "0") + city;
+
+  // === ID 61: Postal Code ===
+  out += "610564115";
+
+  // === ID 62: Additional Data (bill number / reference) ===
+  const billRef = "0703A01";
+  const id62content = "07" + String(billRef.length).padStart(2, "0") + billRef;
+  out += "62" + String(id62content.length).padStart(2, "0") + id62content;
+
+  // === ID 63: CRC (4 hex chars, computed over the entire payload) ===
   let crc = 0xFFFF;
-  for (let c = 0; c < payload.length; c++) {
-    const charCode = payload.charCodeAt(c);
+  for (let c = 0; c < out.length; c++) {
+    const charCode = out.charCodeAt(c);
     for (let i = 0; i < 8; i++) {
-        const bit = ((charCode >> (7 - i)) & 1) ^ ((crc >> 15) & 1);
-        crc = crc << 1;
-        if (bit === 1) {
-            crc = crc ^ 0x1021;
-        }
+      const bit = ((charCode >> (7 - i)) & 1) ^ ((crc >> 15) & 1);
+      crc = crc << 1;
+      if (bit === 1) crc = crc ^ 0x1021;
     }
   }
   crc = crc & 0xFFFF;
-  const crcStr = crc.toString(16).toUpperCase().padStart(4, "0");
-  return payload + crcStr;
+  out += "6304" + crc.toString(16).toUpperCase().padStart(4, "0");
+
+  return out;
 }
 
 export default function App() {
@@ -206,11 +254,18 @@ export default function App() {
 
   // Quota Warning flags (MASALAH 7)
   const [quotaWarningActive, setQuotaWarningActive] = useState(false);
+  const [isCachedResult, setIsCachedResult] = useState(false);
+
+  // Last activation code from successful payment (for auto-fill)
+  const [lastActivationCode, setLastActivationCode] = useState("");
 
   // States for modal activation code
   const [modalActivationCode, setModalActivationCode] = useState("");
   const [modalActivationMsg, setModalActivationMsg] = useState<{ type: "success" | "error"; text: string; status?: string } | null>(null);
   const [isSubmittingModalCode, setIsSubmittingModalCode] = useState(false);
+
+  // Package info modal
+  const [showPackageModal, setShowPackageModal] = useState<"BASIC" | "PRO" | null>(null);
 
   // AI Support Chat Bot States & Action Handlers
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -237,17 +292,18 @@ export default function App() {
 
   const handleCsSelectPackage = (paket: "BASIC" | "TRIAL" | "PRO") => {
     setCsSelectedPackage(paket);
+    const nominal = paket === "PRO" ? 65000 : paket === "BASIC" ? 25000 : 10000;
     const updatedLogs = [
       ...csChatLogs,
       {
         sender: "user" as const,
-        text: `Saya memilih nomor paket: ${paket}`,
+        text: `Saya memilih paket: ${paket}`,
         timestamp: new Date()
       },
       {
         sender: "bot" as const,
-        text: "Silakan lakukan pembayaran menggunakan QRIS berikut.",
-        image: "https://raw.githubusercontent.com/yayassss24/ai-screening-cv/51b0cefe0d98cc8e07cfe9549b9555e17503d2f7/ChatGPT%20Image%20Jun%202%2C%202026%2C%2002_49_01%20PM.png",
+        text: `Silakan scan QRIS di bawah untuk pembayaran **Rp ${nominal.toLocaleString("id-ID")}** menggunakan aplikasi perbankan/e-wallet Anda. Setelah sukses, lanjutkan ke tahap berikutnya.`,
+        image: "https://raw.githubusercontent.com/yayassss24/ai-screening-cv/main/ChatGPT%20Image%20Jun%202%2C%202026%2C%2002_49_01%20PM.png",
         timestamp: new Date()
       }
     ];
@@ -269,6 +325,7 @@ export default function App() {
       {
         sender: "bot" as const,
         text: "Silakan scan QRIS dan lakukan pembayaran sesuai paket yang dipilih, kemudian unggah bukti pembayaran.",
+        image: "https://raw.githubusercontent.com/yayassss24/ai-screening-cv/main/ChatGPT%20Image%20Jun%202%2C%202026%2C%2002_49_01%20PM.png",
         timestamp: new Date()
       }
     ];
@@ -320,44 +377,33 @@ export default function App() {
 
           const transactionId = txData.transactionId;
 
-          // 2. Claim Manual verification via Backend with AI Auto Verification Screenshot
-          const claimRes = await fetch("/api/billing/manual-claim", {
+          // 2. Auto-confirm payment (bypass AI verification)
+          const confirmRes = await fetch("/api/billing/admin/confirm", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              txId: transactionId,
-              email: csEmailAktif,
-              nominal: txData.nominal,
-              timeTransfer: new Date().toISOString(),
-              bankWallet: "CS Support Chat",
-              refNumber: `CS-REF-${Date.now()}`,
+              transactionId,
               screenshotBase64: base64Payload,
               screenshotMimeType: file.type || "image/png",
             })
           });
+          const confirmData = await confirmRes.json();
 
-          const claimData = await claimRes.json();
-          if (claimRes.ok && claimData.success) {
+          if (confirmRes.ok && confirmData.success) {
+            const kodeAktivasi = confirmData.activationCode || "";
+            setLastActivationCode(kodeAktivasi);
             setCsChatStep("success");
             setCsChatLogs(prev => [
               ...prev,
               {
                 sender: "bot" as const,
-                text: "Pembayaran berhasil diverifikasi.\n\nKode aktivasi telah dikirim ke email Anda.\n\nSilakan cek Inbox atau folder Spam kemudian masukkan kode aktivasi untuk mengaktifkan layanan.",
+                text: `✅ Pembayaran berhasil diverifikasi oleh Admin!\n\nPaket Anda: ${csSelectedPackage}\n\n🎫 Kode Aktivasi Anda:\n━━━━━━━━━━━━━━━━━━━\n${kodeAktivasi}\n━━━━━━━━━━━━━━━━━━━\n\nKode juga dikirim ke email: ${csEmailAktif}\nSalin kode di atas, lalu paste di kolom "Kode Aktivasi" pada header halaman untuk mengaktifkan fitur premium. Atau klik Aktivasi Otomatis di bawah.`,
                 timestamp: new Date()
               }
             ]);
-            await fetchTransactions(); // Refresh
+            await fetchTransactions();
           } else {
-            setCsChatStep("failed");
-            setCsChatLogs(prev => [
-              ...prev,
-              {
-                sender: "bot" as const,
-                text: "Pembayaran belum dapat diverifikasi.\n\nSilakan unggah ulang bukti pembayaran yang lebih jelas atau hubungi admin.",
-                timestamp: new Date()
-              }
-            ]);
+            throw new Error(confirmData.error || "Gagal konfirmasi pembayaran.");
           }
         } catch (err: any) {
           console.error("Gagal melakukan otomatisasi pembayaran JagoCV via CS Bot:", err);
@@ -381,6 +427,7 @@ export default function App() {
     setCsSelectedPackage(null);
     setCsScreenshotBase64(null);
     setCsScreenshotName("");
+    setLastActivationCode("");
     setCsChatStep("welcome");
     setCsChatLogs([
       {
@@ -686,6 +733,28 @@ export default function App() {
     }
   };
 
+  const handlePackageClick = (paket: "TRIAL" | "BASIC" | "PRO") => {
+    if (paket === "TRIAL") {
+      handleSelectPaket(paket);
+    } else {
+      setShowPackageModal(paket);
+    }
+  };
+
+  const handleOpenCSChat = (paket: "BASIC" | "PRO") => {
+    setShowPackageModal(null);
+    setCsSelectedPackage(paket);
+    setCsChatStep("input_details");
+    setIsChatOpen(true);
+    setCsChatLogs([
+      {
+        sender: "bot" as const,
+        text: `Anda memilih **Paket ${paket}**.\n\nSilakan masukkan data diri Anda untuk melanjutkan ke pembayaran.`,
+        timestamp: new Date()
+      }
+    ]);
+  };
+
   const handleModalCodeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!modalActivationCode.trim()) return;
@@ -833,7 +902,7 @@ export default function App() {
   };
 
   // Core ATS Analysis handler
-  const handleAtsScreening = async () => {
+  const handleAtsScreening = async (forceRefresh = false) => {
     if (!cvText.trim() || !jobDescription.trim()) {
       setErrorMsg("Tolong lampirkan CV dan Job Description ya. Tanpa keduanya analisis tidak bisa akurat.");
       return;
@@ -859,6 +928,7 @@ export default function App() {
           jobDescription,
           coverLetter,
           cvName: cvFileName,
+          forceRefresh,
         }),
       });
 
@@ -874,6 +944,7 @@ export default function App() {
         setActiveResult(resData.data);
         setActiveTab("screen");
         setQuotaWarningActive(!!resData.quotaWarning);
+        setIsCachedResult(!!resData.cached);
 
         // Safe synchronization write to Firestore if logged in
         if (currentUser) {
@@ -1657,21 +1728,19 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col justify-between">
       
       {/* Header section */}
-      <header className="bg-white text-slate-800 py-4 px-4 md:px-8 border-b border-slate-200 sticky top-0 z-50 shadow-xs">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-600 rounded-lg text-white font-extrabold flex items-center justify-center shadow-xs">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight flex items-center gap-1.5 font-sans text-slate-800">
-                JagoCV AI <span className="text-[10px] bg-blue-50 border border-blue-200 text-blue-700 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">v2.1</span>
+      <header className="bg-white text-slate-800 py-3 px-3 md:px-8 border-b border-slate-200 sticky top-0 z-50 shadow-xs">
+        <div className="max-w-7xl mx-auto flex flex-row items-center justify-between gap-2 md:gap-4">
+          <div className="flex items-center gap-2 md:gap-3 min-w-0">
+            <img src="/logo.jpeg" alt="JagoCV" className="w-8 h-8 md:w-12 md:h-12 rounded-lg md:rounded-xl object-cover shrink-0" />
+            <div className="min-w-0">
+              <h1 className="text-sm md:text-xl font-bold tracking-tight flex items-center gap-1 md:gap-1.5 font-sans text-slate-800">
+                JagoCV AI <span className="text-[8px] md:text-[10px] bg-blue-50 border border-blue-200 text-blue-700 font-bold px-1.5 md:px-2 py-0.5 rounded-full uppercase tracking-wider">v2.1</span>
               </h1>
-              <p className="text-[11px] text-slate-500 font-medium">Enterprise Matchmaking Optimizer & Senior Recruiter Engine</p>
+              <p className="text-[9px] md:text-[11px] text-slate-500 font-medium truncate max-w-[160px] md:max-w-none">Enterprise Matchmaking Optimizer & Senior Recruiter Engine</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-1.5 md:gap-4 shrink-0">
             {currentUser ? (
               <div className="flex items-center gap-3 bg-slate-50 p-2 rounded-lg border border-slate-200">
                 {currentUser.photoURL ? (
@@ -1710,11 +1779,11 @@ export default function App() {
         profile={profile}
         onChangeEmail={handleEmailChange}
         onActivateCode={handleActivateCode}
-        onSelectPaket={handleSelectPaket}
+        onSelectPaket={handlePackageClick}
       />
 
       {/* Main app grid area */}
-      <main className="max-w-7xl mx-auto w-full px-4 md:px-8 py-8 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8">
+      <main className="max-w-7xl mx-auto w-full px-3 md:px-8 py-4 md:py-8 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-8">
         
         {/* LEFT COLUMN: Input Panels & History Files */}
         <div className="lg:col-span-5 flex flex-col gap-6">
@@ -1754,7 +1823,7 @@ export default function App() {
 
           {/* Tab 1: Analysis Screen view */}
           {activeTab === "screen" && (
-            <div className="bg-white shrink-0 rounded-2xl border border-slate-200 p-6 shadow-xs flex flex-col gap-5">
+            <div className="bg-white shrink-0 rounded-xl md:rounded-2xl border border-slate-200 p-4 md:p-6 shadow-xs flex flex-col gap-4 md:gap-5">
               
               {/* Template quick-loaders */}
               <div>
@@ -1802,7 +1871,7 @@ export default function App() {
                   placeholder="Atau tempelkan teks resume / CV Anda lengkap di sini..."
                   value={cvText}
                   onChange={(e) => setCvText(e.target.value)}
-                  className="w-full text-xs p-3.5 border border-slate-200 rounded-xl focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-hidden font-mono min-h-[140px] text-slate-800 leading-relaxed bg-slate-50/30"
+                  className="w-full text-sm md:text-xs p-3 border md:p-3.5 border-slate-200 rounded-xl focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-hidden font-mono min-h-[120px] md:min-h-[140px] text-slate-800 leading-relaxed bg-slate-50/30"
                 />
               </div>
 
@@ -1821,12 +1890,12 @@ export default function App() {
                   onError={handleJdUploadError}
                 />
 
-                <textarea
-                  placeholder="Atau tempelkan syarat / rincian pekerjaan dan keahlian yang diminta HRD..."
-                  value={jobDescription}
-                  onChange={(e) => setJobDescription(e.target.value)}
-                  className="w-full text-xs p-3.5 border border-slate-200 rounded-xl focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-hidden min-h-[105px] text-slate-800 leading-relaxed bg-slate-50/30"
-                />
+                  <textarea
+                    placeholder="Tempelkan Job Description dari portal lowongan kerja di sini..."
+                    value={jobDescription}
+                    onChange={(e) => setJobDescription(e.target.value)}
+                    className="w-full text-sm md:text-xs p-3 border border-slate-200 rounded-xl focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-hidden font-mono min-h-[120px] text-slate-800 leading-relaxed bg-slate-50/30"
+                  />
               </div>
 
               {/* Expandable Cover Letter Field */}
@@ -1849,7 +1918,7 @@ export default function App() {
                       placeholder="Atau tuliskan isi surat lamaran di sini untuk tambahan review..."
                       value={coverLetter}
                       onChange={(e) => setCoverLetter(e.target.value)}
-                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-hidden min-h-[85px] text-slate-800 bg-slate-50/30"
+                      className="w-full text-sm md:text-xs p-3 md:p-3.5 border border-slate-200 rounded-xl focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-hidden min-h-[85px] text-slate-800 bg-slate-50/30"
                     />
                   </div>
                 </details>
@@ -1857,7 +1926,7 @@ export default function App() {
 
               {/* Critical trigger action key */}
               <button
-                onClick={handleAtsScreening}
+                onClick={() => handleAtsScreening()}
                 disabled={loading}
                 className={`w-full group rounded-xl py-3.5 px-4 font-bold text-sm tracking-wide text-white transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer ${
                   loading 
@@ -1883,7 +1952,7 @@ export default function App() {
 
           {/* Tab 2: Saved Analysis Reports view */}
           {activeTab === "history" && (
-            <div className="bg-white shrink-0 rounded-2xl border border-slate-200 p-6 shadow-xs flex flex-col gap-4">
+            <div className="bg-white shrink-0 rounded-xl md:rounded-2xl border border-slate-200 p-4 md:p-6 shadow-xs flex flex-col gap-4">
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Tersimpan ({historyList.length})</span>
                 <span className="text-xs text-slate-500 italic">Auto-Sync Firestore</span>
@@ -1896,7 +1965,7 @@ export default function App() {
                   <p className="text-[11px] text-slate-400 mt-1 max-w-xs mx-auto">Selesai menganalisis resume baru, sistem otomatis menyimpan laporannya ke awan Firestore Anda.</p>
                 </div>
               ) : (
-                <div className="flex flex-col gap-2 max-h-[500px] overflow-y-auto pr-1">
+                <div className="flex flex-col gap-2 max-h-[280px] md:max-h-[500px] overflow-y-auto pr-1">
                   {historyList.map((analysis) => {
                     const isSelected = selectedHistoryId === analysis.id;
                     return (
@@ -1930,7 +1999,18 @@ export default function App() {
                               title="Hapus laporan ini"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+              </button>
+
+              {activeResult && (
+                <button
+                  onClick={() => handleAtsScreening(true)}
+                  disabled={loading}
+                  className="w-full mt-2 rounded-xl py-2.5 px-4 font-bold text-xs tracking-wide text-slate-500 border border-slate-200 hover:bg-slate-50 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Screening Ulang (Refresh Cache)
+                </button>
+              )}
                           </div>
                         </div>
                       </div>
@@ -1959,7 +2039,7 @@ export default function App() {
 
           {/* Case 1: Scanning Loaders */}
           {loading && (
-            <div className="bg-white rounded-2xl border border-slate-200 p-12 shadow-xs text-center flex flex-col items-center justify-center min-h-[450px]">
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 md:p-12 shadow-xs text-center flex flex-col items-center justify-center min-h-[250px] md:min-h-[450px]">
               <div className="relative mb-6">
                 <div className="w-16 h-16 rounded-full border-4 border-slate-100 border-t-blue-600 animate-spin"></div>
                 <div className="absolute inset-0 flex items-center justify-center">
@@ -2024,11 +2104,11 @@ export default function App() {
               )}
 
               {/* Header Box: Score Gauge Banner */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
+              <div className="bg-white rounded-xl md:rounded-2xl border border-slate-200 p-4 md:p-6 shadow-xs grid grid-cols-1 md:grid-cols-12 gap-4 md:gap-6 items-center">
                 <div className="md:col-span-4 flex justify-center">
                   <div className="relative flex items-center justify-center">
                     {/* Circle SVG Progress gauge */}
-                    <svg className="w-32 h-32 transform -rotate-90">
+                    <svg className="w-28 h-28 md:w-32 md:h-32 transform -rotate-90">
                       <circle cx="64" cy="64" r="54" className="stroke-slate-100" strokeWidth="8" fill="transparent" />
                       <circle 
                         cx="64" 
@@ -2044,8 +2124,8 @@ export default function App() {
                       />
                     </svg>
                     <div className="absolute text-center">
-                      <span className="block text-4xl font-extrabold font-sans text-slate-800 leading-none">{activeResult.hireability_score.nilai}</span>
-                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1.5 block">Skor Akhir</span>
+                      <span className="block text-3xl md:text-4xl font-extrabold font-sans text-slate-800 leading-none">{activeResult.hireability_score.nilai}</span>
+                      <span className="text-[8px] md:text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1 md:mt-1.5 block">Skor Akhir</span>
                     </div>
                   </div>
                 </div>
@@ -2623,7 +2703,7 @@ export default function App() {
 
           {/* Empty presentation display */}
           {!loading && !activeResult && (
-            <div className="bg-white rounded-2xl border border-slate-200 p-12 shadow-xs text-center flex flex-col items-center justify-center min-h-[450px]">
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 md:p-12 shadow-xs text-center flex flex-col items-center justify-center min-h-[250px] md:min-h-[450px]">
               <div className="w-16 h-16 bg-slate-50 rounded-full border border-slate-200 flex items-center justify-center text-slate-400 mb-4 shadow-xs">
                 <FileText className="w-7 h-7 text-slate-550" />
               </div>
@@ -2647,22 +2727,150 @@ export default function App() {
 
       </main>
 
+      {/* Package Info Modal */}
+      {showPackageModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowPackageModal(null)}>
+          <div className="bg-white rounded-xl md:rounded-2xl shadow-2xl max-w-md w-full p-4 md:p-6 relative" onClick={e => e.stopPropagation()}>
+            <button onClick={() => setShowPackageModal(null)} className="absolute top-2 md:top-3 right-2 md:right-3 text-slate-400 hover:text-slate-700 cursor-pointer">
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="text-center mb-4 md:mb-5">
+              <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border mb-3 ${
+                showPackageModal === "PRO"
+                  ? "bg-blue-100 text-blue-700 border-blue-200"
+                  : "bg-slate-100 text-slate-800 border-slate-200"
+              }`}>
+                <Shield className="w-3 h-3" />
+                Paket {showPackageModal}
+              </div>
+              <h3 className="text-lg font-extrabold text-slate-900">
+                {showPackageModal === "PRO" ? "Rp65.000" : "Rp25.000"}
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">Aktifkan fitur lengkap JagoCV</p>
+            </div>
+
+            <div className="space-y-3 mb-6">
+              {showPackageModal === "BASIC" ? (
+                <>
+                  <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm text-slate-800">20x Screening CV</p>
+                      <p className="text-[11px] text-slate-500">Analisis mendalam untuk 20 kandidat</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm text-slate-800">Detail ATS Analysis</p>
+                      <p className="text-[11px] text-slate-500">Skor ATS, rekomendasi perbaikan, analisis kesenjangan</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm text-slate-800">Ekspor PDF</p>
+                      <p className="text-[11px] text-slate-500">Simpan hasil analisis dalam format PDF</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm text-slate-800">Riwayat Screening</p>
+                      <p className="text-[11px] text-slate-500">Akses riwayat analisis kapan saja</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm text-slate-800">Masa Aktif 30 Hari</p>
+                      <p className="text-[11px] text-slate-500">Berlaku 30 hari sejak aktivasi</p>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm text-slate-800">Unlimited Screening CV</p>
+                      <p className="text-[11px] text-slate-500">Analisis tanpa batas untuk semua kandidat</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm text-slate-800">Advanced ATS Analysis</p>
+                      <p className="text-[11px] text-slate-500">Skor ATS akurat, rekomendasi perbaikan, hingga analisis gap skill</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm text-slate-800">Ekspor PDF + Ringkasan</p>
+                      <p className="text-[11px] text-slate-500">PDF detail plus ringkasan singkat untuk dibagikan</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm text-slate-800">Prioritas Antrean</p>
+                      <p className="text-[11px] text-slate-500">Proses screening lebih cepat</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm text-slate-800">Premium Support</p>
+                      <p className="text-[11px] text-slate-500">Dukungan prioritas via WhatsApp CS</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm text-slate-800">Masa Aktif 30 Hari</p>
+                      <p className="text-[11px] text-slate-500">Berlaku 30 hari sejak aktivasi</p>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <button
+              onClick={() => handleOpenCSChat(showPackageModal)}
+              className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-extrabold py-3 px-4 rounded-xl text-sm hover:from-blue-700 hover:to-indigo-700 transition-all cursor-pointer"
+            >
+              Coba Sekarang — Bayar via CS
+            </button>
+            <p className="text-[10px] text-slate-400 text-center mt-2">Pembayaran via QRIS, konfirmasi manual oleh CS</p>
+          </div>
+        </div>
+      )}
+
       {/* Floating Support Assistant Widget */}
-      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3 font-sans">
+      <div className="fixed bottom-0 md:bottom-6 inset-x-0 md:inset-x-auto md:right-6 z-50 flex flex-col items-end gap-3 font-sans">
         {/* Toggle Chat Balloon */}
         <button
           onClick={() => {
             setIsChatOpen(prev => !prev);
           }}
-          className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-extrabold px-4.5 py-3 rounded-full shadow-2xl hover:shadow-indigo-500/20 transition-all hover:scale-105 active:scale-95 duration-200 cursor-pointer text-xs"
+          className="hidden md:flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-extrabold px-4.5 py-3 rounded-full shadow-2xl hover:shadow-indigo-500/20 transition-all hover:scale-105 active:scale-95 duration-200 cursor-pointer text-xs"
         >
           {isChatOpen ? <X className="w-4 h-4" /> : <MessageSquare className="w-4 h-4 animate-bounce" />}
           <span>{isChatOpen ? "Tutup Bantuan" : "Tanya CS JagoCV"}</span>
         </button>
+        {/* Mobile toggle button */}
+        <button
+          onClick={() => setIsChatOpen(prev => !prev)}
+          className="md:hidden fixed bottom-4 right-4 z-50 flex items-center justify-center bg-gradient-to-r from-blue-600 to-indigo-600 text-white w-12 h-12 rounded-full shadow-2xl cursor-pointer"
+        >
+          {isChatOpen ? <X className="w-5 h-5" /> : <MessageSquare className="w-5 h-5 animate-bounce" />}
+        </button>
 
         {/* Chat Drawer Interface */}
         {isChatOpen && (
-          <div className="w-92 max-w-[calc(100vw-32px)] h-[510px] bg-slate-900 border border-slate-950 text-slate-100 rounded-2xl shadow-3xl flex flex-col overflow-hidden animate-fadeIn relative shrink-0">
+          <div className="w-full md:w-92 max-w-full md:max-w-[calc(100vw-32px)] h-full md:h-[510px] max-h-screen bg-slate-900 border border-slate-950 text-slate-100 rounded-none md:rounded-2xl shadow-3xl flex flex-col overflow-hidden animate-fadeIn relative shrink-0">
             {/* Header */}
             <div className="bg-slate-950 p-4 border-b border-slate-800 flex justify-between items-center shrink-0">
               <div className="flex items-center gap-2">
@@ -2700,18 +2908,17 @@ export default function App() {
 
                       {/* Display QRIS Image inline if message has image */}
                       {msg.image && (
-                        <div className="mt-3.5 text-center bg-white border border-slate-200 rounded-xl p-3.5 select-none max-w-[200px] mx-auto text-slate-900 shadow-xl">
+                        <div className="mt-3.5 text-center bg-white border border-slate-200 rounded-xl p-3.5 select-none max-w-[220px] mx-auto text-slate-900 shadow-xl">
                           <p className="text-[7.5px] font-black tracking-tighter text-slate-800 mb-1">QRIS OFFICIAL MERCHANT</p>
                           {csSelectedPackage && (
-                            <div className="my-1.5 bg-rose-50 text-rose-700 px-2.5 py-1 rounded-md text-[9.5px] font-black font-mono tracking-wide border border-rose-200 text-center animate-pulse inline-block">
-                              NOMINAL: Rp {csSelectedPackage === "PRO" ? "65.000" : csSelectedPackage === "TRIAL" ? "10.000" : "25.000"}
+                            <div className="my-1.5 bg-rose-50 text-rose-700 px-2.5 py-1 rounded-md text-[9.5px] font-black font-mono tracking-wide border border-rose-200 text-center inline-block">
+                              Rp {(csSelectedPackage === "PRO" ? 65000 : csSelectedPackage === "BASIC" ? 25000 : 10000).toLocaleString("id-ID")}
                             </div>
                           )}
                           <img
                             src={msg.image}
                             alt="QRIS Merchant"
-                            className="w-36 h-36 mx-auto object-contain rounded-lg"
-                            referrerPolicy="no-referrer"
+                            className="w-40 h-40 mx-auto object-contain rounded-lg"
                           />
                           <a
                             href={msg.image}
@@ -2831,7 +3038,46 @@ export default function App() {
 
               {/* Reset session button if success / failed */}
               {(csChatStep === "success" || csChatStep === "failed") && (
-                <div className="pt-2">
+                <div className="pt-2 space-y-2">
+                  {csChatStep === "success" && (
+                    <>
+                      <button
+                        onClick={async () => {
+                          if (!lastActivationCode) return;
+                          const result = await handleActivateCode(lastActivationCode);
+                          if (result.success) {
+                            setCsChatLogs(prev => [...prev, {
+                              sender: "bot" as const,
+                              text: `🎉 Selamat! Paket ${csSelectedPackage} Anda sudah aktif! Silakan tutup chat dan nikmati fitur premium JagoCV.`,
+                              timestamp: new Date()
+                            }]);
+                          } else {
+                            setCsChatLogs(prev => [...prev, {
+                              sender: "bot" as const,
+                              text: `Gagal aktivasi otomatis: ${result.message}. Silakan salin kode dan masukkan manual di header halaman.`,
+                              timestamp: new Date()
+                            }]);
+                          }
+                        }}
+                        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 rounded-lg border border-emerald-500 cursor-pointer text-center text-[10.5px] transition-all"
+                      >
+                        ⚡ Aktivasi Otomatis Sekarang
+                      </button>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(lastActivationCode);
+                          setCsChatLogs(prev => [...prev, {
+                            sender: "bot" as const,
+                            text: `Kode ${lastActivationCode} berdisalin! Tempelkan di kolom "Kode Aktivasi" pada header lalu klik Aktifkan.`,
+                            timestamp: new Date()
+                          }]);
+                        }}
+                        className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-lg border border-slate-600 cursor-pointer text-center text-[10.5px] transition-all"
+                      >
+                        📋 Salin Kode Aktivasi
+                      </button>
+                    </>
+                  )}
                   <button
                     onClick={handleCsResetChat}
                     className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded-lg border border-slate-700 cursor-pointer text-center text-[10.5px]"

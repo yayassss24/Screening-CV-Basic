@@ -498,18 +498,11 @@ export default function App() {
   };
 
   const handleCvUploadError = (err: string) => {
-    const lower = err.toLowerCase();
-    if (lower.includes("password") || lower.includes("encrypt") || lower.includes("sandi") || lower.includes("kunci")) {
-      setErrorMsg("⚠ File terenkripsi oleh password. Saya mengaktifkan input manual — silakan paste teks CV kamu langsung di kotak yang muncul.");
-    } else if (lower.includes("corrupt") || lower.includes("rusak") || lower.includes("unreadable") || lower.includes("tidak terbaca")) {
-      setErrorMsg("⚠ Berkas tampaknya rusak atau tidak terbaca. Mode input manual telah diaktifkan secara otomatis — silakan paste teks CV Anda di area teks di bawah.");
-    } else {
-      setErrorMsg("File tidak bisa dibaca otomatis. Saya aktifkan mode input manual — silakan paste teks CV kamu langsung di kotak yang muncul.");
-    }
+    setErrorMsg(err);
   };
 
   const handleJdUploadError = (err: string) => {
-    setErrorMsg("File tidak bisa dibaca otomatis. Saya aktifkan mode input manual — silakan paste teks kualifikasi lowongan kamu langsung di kotak yang muncul.");
+    setErrorMsg(err);
   };
 
   const fetchTransactions = async () => {
@@ -1854,7 +1847,7 @@ export default function App() {
                 </div>
                       <FileUploaderDropzone
                   label="Unggah Dokumen CV / Resume"
-                  allowedExtensions={[".pdf", ".docx", ".doc", ".txt", ".png", ".jpg", ".jpeg"]}
+                  allowedExtensions={[".pdf", ".docx", ".txt"]}
                   onTextExtracted={(text, filename) => {
                     if (text) {
                       setCvText(text);
@@ -1883,7 +1876,7 @@ export default function App() {
 
                 <FileUploaderDropzone
                   label="Unggah Dokumen Informasi Lowongan"
-                  allowedExtensions={[".pdf", ".docx", ".doc", ".txt", ".png", ".jpg", ".jpeg"]}
+                  allowedExtensions={[".pdf", ".docx", ".txt"]}
                   onTextExtracted={(text) => {
                     setJobDescription(text || "");
                   }}
@@ -1908,7 +1901,7 @@ export default function App() {
                   <div className="p-3 border-t border-slate-200 flex flex-col gap-2">
                     <FileUploaderDropzone
                       label="Unggah Dokumen Cover Letter"
-                      allowedExtensions={[".pdf", ".docx", ".doc", ".txt", ".png", ".jpg", ".jpeg"]}
+                      allowedExtensions={[".pdf", ".docx", ".txt"]}
                       onTextExtracted={(text) => {
                         setCoverLetter(text || "");
                       }}

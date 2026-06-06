@@ -36,47 +36,40 @@ export default function FileUploaderDropzone({
     setUploadedFileName(file.name);
     
     try {
-      // Get correct MIME type
-      let mimeType = file.type;
-      if (!mimeType) {
-        if (file.name.endsWith(".pdf")) mimeType = "application/pdf";
-        else if (file.name.endsWith(".docx")) mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-        else if (file.name.endsWith(".doc")) mimeType = "application/msword";
-        else if (file.name.endsWith(".txt")) mimeType = "text/plain";
-        else if (file.name.endsWith(".png")) mimeType = "image/png";
-        else if (file.name.endsWith(".jpg") || file.name.endsWith(".jpeg")) mimeType = "image/jpeg";
-      }
+      let extractedText = "";
 
-      // Convert to base64
-      const reader = new FileReader();
-      const base64Promise = new Promise<string>((resolve, reject) => {
-        reader.readAsDataURL(file);
-        reader.onload = () => {
-          const base64String = (reader.result as string).split(",")[1];
-          resolve(base64String);
-        };
-        reader.onerror = (error) => reject(error);
-      });
-
-      const fileBase64 = await base64Promise;
-
-      // Send to server-side document extractor
-      const response = await fetch("/api/extract-text", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileBase64, mimeType }),
-      });
-
-      if (!response.ok) {
-        const errJson = await response.json();
-        throw new Error(errJson.error || "Gagal memproses berkas dokumen");
-      }
-
-      const resData = await response.json();
-      if (resData.success && resData.text) {
-        onTextExtracted(resData.text, file.name);
+      if (extension === ".txt") {
+        extractedText = await file.text();
+      } else if (extension === ".docx") {
+        const mammoth = await import("mammoth");
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        extractedText = result.value || "";
+      } else if (extension === ".pdf") {
+        const pdfjs = await import("pdfjs-dist");
+        const version = pdfjs.version;
+        pdfjs.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${version}/build/pdf.worker.min.mjs`;
+        const arrayBuffer = await file.arrayBuffer();
+        const uint8arr = new Uint8Array(arrayBuffer);
+        const doc = await pdfjs.getDocument({ data: uint8arr }).promise;
+        let fullText = "";
+        for (let i = 1; i <= doc.numPages; i++) {
+          const page = await doc.getPage(i);
+          const content = await page.getTextContent();
+          const pageText = content.items.map((item: any) => item.str).join(" ");
+          fullText += pageText + "\n";
+        }
+        extractedText = fullText.trim();
+      } else if ([".png", ".jpg", ".jpeg"].includes(extension)) {
+        throw new Error("Ekstraksi teks dari gambar tidak didukung. Gunakan file PDF, DOCX, atau TXT.");
       } else {
-        throw new Error("Gagal mengambil teks dari dalam dokumen berkas.");
+        throw new Error("Tipe file tidak didukung untuk ekstraksi otomatis.");
+      }
+
+      if (extractedText.trim()) {
+        onTextExtracted(extractedText.trim(), file.name);
+      } else {
+        throw new Error("Tidak ada teks yang dapat diekstrak. Pastikan file berisi teks.");
       }
     } catch (err: any) {
       console.error("File extraction failed:", err);

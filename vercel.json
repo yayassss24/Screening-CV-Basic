@@ -1,7 +1,7 @@
 {
   "version": 2,
-  "buildCommand": "vite build",
   "installCommand": "npm install",
+  "buildCommand": "vite build",
   "builds": [
     {
       "src": "api/index.ts",
@@ -9,6 +9,8 @@
     }
   ],
   "routes": [
-    { "src": "/(.*)", "dest": "api/index.ts" }
+    { "src": "/api/(.*)", "dest": "api/index.ts" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }

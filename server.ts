@@ -399,20 +399,13 @@ app.post("/api/extract-text", async (req, res) => {
       return res.json({ success: true, text: result.value || "" });
     }
 
-    // Server-side PDF extraction using pdfjs-dist (avoids Gemini quota)
+    // Server-side PDF extraction using pdf-parse (no native deps)
     if (mimeType === "application/pdf") {
       const buffer = Buffer.from(fileBase64, "base64");
-      const uint8arr = new Uint8Array(buffer);
-      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-      const doc = await pdfjs.getDocument({ data: uint8arr }).promise;
-      let fullText = "";
-      for (let i = 1; i <= doc.numPages; i++) {
-        const page = await doc.getPage(i);
-        const content = await page.getTextContent();
-        const pageText = content.items.map((item: any) => item.str).join(" ");
-        fullText += pageText + "\n";
-      }
-      return res.json({ success: true, text: fullText.trim() });
+      const { PDFParse } = await import("pdf-parse");
+      const parser = new PDFParse({ data: buffer });
+      const result = await parser.getText({ pageJoiner: "\n" });
+      return res.json({ success: true, text: result.text.trim() });
     }
 
     // Image files: use Tesseract.js for local OCR (avoids Gemini quota)

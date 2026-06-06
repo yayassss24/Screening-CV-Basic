@@ -6,9 +6,15 @@
     {
       "src": "api/index.ts",
       "use": "@vercel/node"
+    },
+    {
+      "src": "dist/**",
+      "use": "@vercel/static"
     }
   ],
   "routes": [
-    { "src": "/(.*)", "dest": "api/index.ts" }
+    { "src": "/api/(.*)", "dest": "api/index.ts" },
+    { "src": "/(.*)\\.(js|css|svg|png|jpg|jpeg|gif|ico|json|webp|woff2?|ttf|eot|mp4|webm|wasm|mjs)", "dest": "/dist/$1.$2" },
+    { "src": "/(.*)", "dest": "/dist/index.html" }
   ]
 }

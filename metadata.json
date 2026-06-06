@@ -1,0 +1,8 @@
+{
+  "name": "Jago CV ",
+  "description": "Platform ATS Screening \u0026 Review CV berbasis AI dan Career Coach Profesional dengan pola pikir Recruiter Enterprise.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

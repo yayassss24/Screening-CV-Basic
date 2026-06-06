@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 1. Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- REUSABLE UTILITY PRIMITIVES ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function incoming() {
+      return request.resource.data;
+    }
+    
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isEmailOwner(email) {
+      return isSignedIn() && 
+             request.auth.token.email != null && 
+             (email == request.auth.token.email || email.lower() == request.auth.token.email.lower());
+    }
+
+    // --- VALIDATION BLUEPRINTS & SCHEMAS ---
+    
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['email', 'paket', 'screeningSisa', 'screeningTotalCount']) 
+        && data.email is string 
+        && data.email.size() > 0
+        && (data.paket == 'TRIAL' || data.paket == 'BASIC' || data.paket == 'PRO')
+        && (data.screeningSisa is int || data.screeningSisa == 'Unlimited')
+        && data.screeningTotalCount is int;
+    }
+
+    function isValidActivationCode(data) {
+      return data.keys().hasAll(['kode', 'paket', 'digunakan', 'tanggalCadaluwarsa'])
+        && data.kode is string
+        && (data.paket == 'BASIC' || data.paket == 'PRO')
+        && data.digunakan is bool
+        && data.tanggalCadaluwarsa is string;
+    }
+
+    function isValidSavedAnalysis(data) {
+      return data.keys().hasAll(['id', 'email', 'paket', 'tanggal', 'cvKandidatName', 'jobTitle', 'skorAkhir', 'data'])
+        && data.id is string
+        && data.email is string
+        && (data.paket == 'TRIAL' || data.paket == 'BASIC' || data.paket == 'PRO')
+        && data.tanggal is string
+        && data.cvKandidatName is string
+        && data.jobTitle is string
+        && data.skorAkhir is int
+        && data.data is map;
+    }
+
+    // --- COLLECTION RULES ---
+
+    // Root user profiles containing package and subscription credits
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || (resource != null && isEmailOwner(existing().email)));
+      allow list: if isSignedIn() && (resource != null && isEmailOwner(existing().email));
+      allow create: if isSignedIn() && (request.auth.uid == userId || isEmailOwner(incoming().email)) && isValidUserProfile(incoming());
+      allow update: if isSignedIn() && (request.auth.uid == userId || isEmailOwner(existing().email)) 
+                    && isValidUserProfile(incoming()) 
+                    && (incoming().diff(existing()).affectedKeys().hasOnly(['screeningSisa', 'screeningTotalCount', 'kodeAktif', 'tanggalBerlaku', 'paket']));
+    }
+
+    // Voucher serial codes for premium activations
+    match /activation_codes/{codeId} {
+      allow get: if isSignedIn();
+      // Only permit updating when changing 'digunakan' from false to true, while binding to logged-in user email
+      allow update: if isSignedIn() 
+                    && existing().digunakan == false 
+                    && incoming().digunakan == true 
+                    && isEmailOwner(incoming().emailDigunakan)
+                    && (incoming().diff(existing()).affectedKeys().hasOnly(['digunakan', 'emailDigunakan']))
+                    && isValidActivationCode(incoming());
+    }
+
+    // Saves previous ATS analysis history records
+    match /saved_analyses/{analysisId} {
+      allow get: if isSignedIn() && isEmailOwner(existing().email);
+      allow list: if isSignedIn() && isEmailOwner(existing().email);
+      allow create: if isSignedIn() && isEmailOwner(incoming().email) && isValidSavedAnalysis(incoming());
+      allow delete: if isSignedIn() && isEmailOwner(existing().email);
+    }
+  }
+}

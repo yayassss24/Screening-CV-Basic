@@ -1,0 +1,121 @@
+{
+  "entities": {
+    "userProfile": {
+      "title": "UserProfile",
+      "description": "User profile with package status and available screening credits",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Email address of the user"
+        },
+        "paket": {
+          "type": "string",
+          "enum": ["TRIAL", "BASIC", "PRO"],
+          "description": "Current active tier name"
+        },
+        "screeningSisa": {
+          "type": "string",
+          "description": "Number of credits remaining, or 'Unlimited' for PRO"
+        },
+        "screeningTotalCount": {
+          "type": "integer",
+          "description": "Total number of analysis sessions run by user"
+        },
+        "kodeAktif": {
+          "type": "string",
+          "description": "Optional activated serial license voucher"
+        },
+        "tanggalBerlaku": {
+          "type": "string",
+          "description": "ISO date for premium expiry"
+        }
+      },
+      "required": ["email", "paket", "screeningSisa", "screeningTotalCount"]
+    },
+    "activationCode": {
+      "title": "ActivationCode",
+      "description": "Subscription code that can be voucher-redeemed to unlock BASIC or PRO package",
+      "type": "object",
+      "properties": {
+        "kode": {
+          "type": "string",
+          "description": "Uniquely formatted voucher serial JCV-XXXX-XXXX-XXXX"
+        },
+        "paket": {
+          "type": "string",
+          "enum": ["BASIC", "PRO"],
+          "description": "License package tier upgraded upon redemption"
+        },
+        "digunakan": {
+          "type": "boolean",
+          "description": "Has this code already been used"
+        },
+        "emailDigunakan": {
+          "type": "string",
+          "description": "The email of user who redeemed this code"
+        },
+        "tanggalCadaluwarsa": {
+          "type": "string",
+          "description": "Voucher expiry ISO date"
+        }
+      },
+      "required": ["kode", "paket", "digunakan", "tanggalCadaluwarsa"]
+    },
+    "savedAnalysis": {
+      "title": "SavedAnalysis",
+      "description": "Historical ATS resume scan report including specific scores, keywords, rewrite tips, and career coaching feed",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The unique report ID"
+        },
+        "email": {
+          "type": "string",
+          "description": "Owner user email address"
+        },
+        "paket": {
+          "type": "string",
+          "enum": ["TRIAL", "BASIC", "PRO"],
+          "description": "Active package level during the run"
+        },
+        "tanggal": {
+          "type": "string",
+          "description": "ISO execution date"
+        },
+        "cvKandidatName": {
+          "type": "string",
+          "description": "Name of the analyzed resume"
+        },
+        "jobTitle": {
+          "type": "string",
+          "description": "Target job title position screen"
+        },
+        "skorAkhir": {
+          "type": "integer",
+          "description": "Overall hireability rating scale"
+        },
+        "data": {
+          "type": "object",
+          "description": "Full structured JagoCV screening JSON output contents"
+        }
+      },
+      "required": ["id", "email", "paket", "tanggal", "cvKandidatName", "jobTitle", "skorAkhir", "data"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "userProfile",
+      "description": "Root collection containing individual user profiles"
+    },
+    "/activation_codes/{codeId}": {
+      "schema": "activationCode",
+      "description": "Collection storing valid subscription coupon licenses"
+    },
+    "/saved_analyses/{analysisId}": {
+      "schema": "savedAnalysis",
+      "description": "Saves previous detailed resume analysis output records for the history dashboard"
+    }
+  }
+}

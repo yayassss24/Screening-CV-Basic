@@ -1,14 +1,9 @@
 {
   "version": 2,
   "installCommand": "npm install",
-  "buildCommand": "vite build && mkdir -p api/static && cp -r dist/. api/static/",
-  "builds": [
-    {
-      "src": "api/index.ts",
-      "use": "@vercel/node"
-    }
-  ],
+  "buildCommand": "vite build && cp -r dist/. public/",
   "routes": [
-    { "src": "/(.*)", "dest": "api/index.ts" }
+    { "src": "/api/(.*)", "dest": "api/index.ts" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }

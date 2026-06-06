@@ -39,7 +39,7 @@ import {
   setDoc,
   getDoc
 } from "firebase/firestore";
-import { auth, logOut, db, emailToUsername } from "./firebase";
+import { auth, logOut, db } from "./firebase";
 import { JagoCVAnalysisResult, UserProfile, SavedAnalysis } from "./types";
 import UserAccountHeader from "./components/UserAccountHeader";
 import FileUploaderDropzone from "./components/FileUploaderDropzone";
@@ -678,7 +678,7 @@ export default function App() {
 
   const getUsername = () => {
     if (currentUser?.displayName) return currentUser.displayName;
-    if (currentUser?.email) return emailToUsername(currentUser.email);
+    if (currentUser?.email) return currentUser.email.split("@")[0];
     return "";
   };
 

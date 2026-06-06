@@ -1,10 +1,9 @@
 {
-  "projectId": "startup-wavelet-lf4nj",
-  "appId": "1:921048693927:web:43009ef9966f4215492f82",
-  "apiKey": "removed",
-  "authDomain": "startup-wavelet-lf4nj.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-4e7feb75-82af-446d-8538-373fe6a0b5d3",
-  "storageBucket": "startup-wavelet-lf4nj.firebasestorage.app",
-  "messagingSenderId": "921048693927",
-  "measurementId": ""
+  "projectId": "cvjago-3de34",
+  "appId": "1:734098834562:web:3bd2e43b559bd0ee74609b",
+  "apiKey": "AIzaSyDJ_O-AQmjhtqXJ_m_BkscI8Gq5XApou4o",
+  "authDomain": "cvjago-3de34.firebaseapp.com",
+  "storageBucket": "cvjago-3de34.firebasestorage.app",
+  "messagingSenderId": "734098834562",
+  "measurementId": "G-J2GSLTVK0Y"
 }

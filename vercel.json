@@ -1,9 +1,8 @@
 {
   "version": 2,
   "installCommand": "npm install",
-  "buildCommand": "vite build && cp -r dist/. public/",
+  "buildCommand": "vite build",
   "routes": [
-    { "src": "/api/(.*)", "dest": "api/index.ts" },
-    { "src": "/(.*)", "dest": "/index.html" }
+    { "src": "/(.*)", "dest": "api/index.ts" }
   ]
 }

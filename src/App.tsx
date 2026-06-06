@@ -205,13 +205,23 @@ function buildQRIS(nominal?: number): string {
   return out;
 }
 
+function getGuestEmail(): string {
+  const key = "jagocv_guest_id";
+  let id = localStorage.getItem(key);
+  if (!id) {
+    id = "guest_" + Math.random().toString(36).substring(2, 10);
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [profile, setProfile] = useState<UserProfile>({
-    email: "",
-    paket: "",
-    screeningSisa: 0,
+    email: getGuestEmail(),
+    paket: "TRIAL",
+    screeningSisa: 3,
     screeningTotalCount: 0,
   });
 
@@ -552,12 +562,12 @@ export default function App() {
         }
       } else {
         setCurrentUser(null);
-        setProfile({
-          email: "",
-          paket: "",
-          screeningSisa: 0,
-          screeningTotalCount: 0,
-        });
+        setProfile(prev => ({
+          email: getGuestEmail(),
+          paket: "TRIAL",
+          screeningSisa: 3,
+          screeningTotalCount: prev.screeningTotalCount,
+        }));
       }
     });
     return () => unsubscribe();
@@ -656,9 +666,9 @@ export default function App() {
     try {
       await logOut();
       setProfile({
-        email: "",
-        paket: "",
-        screeningSisa: 0,
+        email: getGuestEmail(),
+        paket: "TRIAL",
+        screeningSisa: 3,
         screeningTotalCount: 0,
       });
     } catch (err: any) {

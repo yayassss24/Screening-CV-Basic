@@ -107,7 +107,7 @@ export interface JagoCVAnalysisResult {
 
 export interface UserProfile {
   email: string;
-  paket: "" | "BASIC" | "PRO";
+  paket: "TRIAL" | "BASIC" | "PRO";
   screeningSisa: number | "Unlimited";
   screeningTotalCount: number;
   kodeAktif?: string;

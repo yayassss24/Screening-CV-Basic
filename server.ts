@@ -332,18 +332,13 @@ app.get("/api/profile", async (req, res) => {
     const dbData = await initDatabase();
     const email = (req.query.email as string || "yahyasyarofuddin09@gmail.com").trim().toLowerCase();
 
-    // Preserve existing paket or default to "PRO"
     if (!dbData.users[email]) {
       dbData.users[email] = {
         email,
-        paket: "PRO",
-        screeningSisa: "Unlimited",
+        paket: "TRIAL",
+        screeningSisa: 3,
         screeningTotalCount: 0,
       };
-      await saveDatabase(dbData);
-    } else {
-      // Force "Unlimited" screeningSisa for free full access on all tiers
-      dbData.users[email].screeningSisa = "Unlimited";
       await saveDatabase(dbData);
     }
 
@@ -358,7 +353,7 @@ app.post("/api/profile/select-paket", async (req, res) => {
   try {
     const dbData = await initDatabase();
     const { email, paket } = req.body;
-    if (!email || (paket !== "BASIC" && paket !== "PRO" && paket !== "TRIAL")) {
+    if (!email || (paket !== "BASIC" && paket !== "PRO")) {
       return res.status(400).json({ error: "Email dan paket yang valid wajib disertakan." });
     }
     const cleanEmail = email.trim().toLowerCase();
@@ -367,7 +362,7 @@ app.post("/api/profile/select-paket", async (req, res) => {
       ...dbData.users[cleanEmail],
       email: cleanEmail,
       paket,
-      screeningSisa: "Unlimited",
+      screeningSisa: paket === "PRO" ? "Unlimited" : 20,
       screeningTotalCount: dbData.users[cleanEmail]?.screeningTotalCount || 0,
     };
     await saveDatabase(dbData);
@@ -1490,19 +1485,24 @@ app.post("/api/ats/analyze", async (req, res) => {
       });
     }
 
-    // Ensure user profile exists, keeping their selected package state, but forcing "Unlimited" screeningSisa
     if (!dbData.users[email]) {
       dbData.users[email] = {
         email,
-        paket: "PRO",
-        screeningSisa: "Unlimited",
+        paket: "TRIAL",
+        screeningSisa: 3,
         screeningTotalCount: 0,
       };
-    } else {
-      dbData.users[email].screeningSisa = "Unlimited";
     }
 
     const userProfile = dbData.users[email];
+
+    if (userProfile.screeningSisa !== "Unlimited" && Number(userProfile.screeningSisa) <= 0) {
+      return res.status(402).json({
+        error: "Kuota screening Anda sudah habis. Silakan beli paket BASIC atau PRO untuk melanjutkan.",
+        quotaExhausted: true,
+        profile: userProfile,
+      });
+    }
 
     let hasQuotaWarning = false;
 

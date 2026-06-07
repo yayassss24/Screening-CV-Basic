@@ -432,6 +432,32 @@ export default function App() {
 
           const transactionId = txData.transactionId;
 
+          // 1a. AI Fraud Audit before confirmation
+          const auditRes = await fetch("/api/billing/audit-payment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              screenshotBase64: base64Payload,
+              screenshotMimeType: file.type || "image/png",
+              expectedNominal: csSelectedPackage === "PRO" ? 65000 : 25000,
+            })
+          });
+          if (auditRes.ok) {
+            const auditData = await auditRes.json();
+            if (auditData.success && auditData.audit) {
+              const a = auditData.audit;
+              setCsChatLogs(prev => [...prev, {
+                sender: "bot" as const,
+                text: `🔍 Laporan Audit Forensik Pembayaran:\n\n• AI Generation: ${a.ai_generation?.score || 'N/A'}% — ${a.ai_generation?.conclusion || '-'}\n• Edit Nominal: ${a.nominal_tampering?.score || 'N/A'}% — ${a.nominal_tampering?.conclusion || '-'}\n• Status Pembayaran: ${a.payment_validation?.is_successful ? '✅ Valid' : '❌ Tidak Valid'}\n• Merchant Cocok: ${a.payment_validation?.merchant_match ? '✅ Ya' : '❌ Tidak'}\n• Nominal Cocok: ${a.payment_validation?.nominal_match ? '✅ Ya' : '❌ Tidak'}\n\nKesimpulan: ${a.summary || a.overall_verdict || '-'}`,
+                timestamp: new Date()
+              }]);
+              // Reject if clearly fake or tampered
+              if (a.overall_verdict === "FAKE" || a.nominal_tampering?.score >= 70 || a.ai_generation?.score >= 70) {
+                throw new Error(`Sistem mendeteksi indikasi kecurangan: ${a.summary || 'Gambar terdeteksi palsu atau diedit.'} Silakan unggah screenshot asli.`);
+              }
+            }
+          }
+
           // 2. Auto-confirm payment (bypass AI verification)
           const confirmRes = await fetch("/api/billing/admin/confirm", {
             method: "POST",

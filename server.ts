@@ -1054,6 +1054,113 @@ app.post("/api/billing/activate-demo", (req, res) => {
   res.status(403).json({ success: false, message: "Akses demo dinonaktifkan." });
 });
 
+// AI Fraud Audit for Payment Screenshots
+// Detects:
+//   1. AI-generated / synthetic images
+//   2. Tampered nominal / edited amount
+//   3. Fake transaction screenshots
+//   4. QRIS / non-payment images
+app.post("/api/billing/audit-payment", async (req, res) => {
+  try {
+    const { screenshotBase64, screenshotMimeType, expectedNominal } = req.body;
+    if (!screenshotBase64) {
+      return res.status(400).json({ success: false, error: "Screenshot wajib disertakan." });
+    }
+
+    const finalMimeType = screenshotMimeType || "image/png";
+    const nominalHint = expectedNominal ? `Rp ${Number(expectedNominal).toLocaleString("id-ID")}` : "tidak disebutkan";
+
+    const prompt = `Anda adalah "JagoCV Payment Forensic Auditor" — spesialis keamanan pembayaran digital yang bertugas mengaudit bukti transfer apakah asli atau hasil rekayasa.
+
+Tugas Anda: Analisis screenshot bukti pembayaran ini secara forensik dan berikan LAPORAN AUDIT mendetail.
+
+### 1. AI GENERATION DETECTION (Deteksi Gambar Buatan AI)
+Periksa tanda-tanda gambar dihasilkan oleh AI:
+- **Pixel-perfect edges**: Tepi yang terlalu sempurna, tanpa noise natural
+- **Inconsistent lighting**: Bayangan/cahaya tidak konsisten antar elemen
+- **Unnatural text rendering**: Teks yang terlalu rapi atau sebaliknya kacau
+- **Missing natural noise**: Tidak ada grain/noise kamera yang natural
+- **Artifacts**: Artefak kompresi aneh di area transisi teks-gambar
+- **Logical inconsistencies**: Nominal, tanggal, atau detail lain yang tidak masuk akal
+
+### 2. NOMINAL TAMPERING DETECTION (Deteksi Edit Nominal)
+Periksa apakah nominal uang diedit/dimanipulasi:
+- **Font mismatch**: Font nominal berbeda dengan teks lain di sekitarnya
+- **Alignment issues**: Posisi nominal tidak sejajar dengan elemen lain
+- **Color discrepancy**: Warna nominal berbeda dari warna asli aplikasi
+- **Shadow inconsistency**: Bayangan nominal tidak cocok dengan bayangan sekitarnya
+- **Pixel bleeding**: Ada pixel aneh di sekitar angka nominal
+- **Clone stamp artifacts**: Tanda-tanda penggunaan clone stamp/spot healing
+
+### 3. PAYMENT VALIDATION (Validasi Pembayaran)
+- Apakah screenshot menunjukkan transaksi BERHASIL / SUKSES / SUCCESS / SETTLED?
+- Apakah merchant/penerima adalah "JagoCV"?
+- Apakah nominal sesuai dengan yang diharapkan (${nominalHint})?
+- Apakah tanggal/waktu transaksi wajar dan masuk akal?
+
+### 4. OVERALL VERDICT
+Berdasarkan analisis di atas, berikan kesimpulan akhir.
+
+Format Output (wajib JSON murni tanpa markdown wrapper):
+{
+  "overall_verdict": "AUTHENTIC" | "SUSPICIOUS" | "FAKE",
+  "confidence_score": 0-100,
+  "ai_generation": {
+    "score": 0-100,
+    "indicators": ["string"],
+    "conclusion": "string"
+  },
+  "nominal_tampering": {
+    "score": 0-100,
+    "indicators": ["string"],
+    "conclusion": "string",
+    "detected_nominal": "string | null"
+  },
+  "payment_validation": {
+    "is_successful": true | false,
+    "merchant_match": true | false,
+    "nominal_match": true | false,
+    "details": "string"
+  },
+  "summary": "string (penjelasan panjang dalam Bahasa Indonesia)"
+}`;
+
+    const geminiRes = await callGeminiWithRetry({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType: finalMimeType,
+                data: screenshotBase64,
+              },
+            },
+          ],
+        },
+      ],
+      config: {
+        responseMimeType: "application/json",
+      },
+    });
+
+    if (geminiRes && geminiRes.text) {
+      let textToParse = geminiRes.text.trim();
+      if (textToParse.startsWith("```")) {
+        textToParse = textToParse.replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
+      }
+      const result = JSON.parse(textToParse);
+      return res.json({ success: true, audit: result });
+    }
+
+    res.status(500).json({ success: false, error: "Gagal mendapatkan respons dari AI." });
+  } catch (error: any) {
+    console.error("[AUDIT PAYMENT ERROR]", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Endpoint Manual Claim Transfer Bank / E-Wallet (MASALAH 6) - with Automated AI Verification using Gemini
 app.post("/api/billing/manual-claim", async (req, res) => {
   try {
@@ -1091,6 +1198,7 @@ app.post("/api/billing/manual-claim", async (req, res) => {
     let aiMessage = "Verifikasi gagal dilakukan secara otomatis oleh AI. Silakan tunggu peninjauan manual dari tim JagoCV.";
     let aiPackage: "basic" | "trial" | "pro" | "none" = "none";
     let generatedCodePlain = "";
+    let fraudCheck: any = null;
 
     if (screenshotBase64) {
       try {
@@ -1104,13 +1212,22 @@ Alur Kerja Sistem (Workflow):
    - Nominal sekitar Rp 25.000 -> Paket BASIC
    - Nominal sekitar Rp 65.000 -> Paket PRO
 5. **Penanganan Kasus Gagal**: Jika gambar hanya berupa barcode QRIS kosong (belum dibayar), poster promosi, foto selfie, atau struk editan/palsu, tolak transaksi dengan penjelasan sopan dalam Bahasa Indonesia.
+6. **FORENSIK DAN ANTI-FRAUD** — Lakukan audit forensik pada gambar:
+   a. **AI GENERATION CHECK**: Apakah gambar ini buatan AI? Cari pixel-perfect edges, inconsistent lighting, unnatural text rendering, missing natural noise, artifacts.
+   b. **NOMINAL TAMPERING CHECK**: Apakah nominal diedit? Cari font mismatch, alignment issues, color discrepancy, shadow inconsistency, pixel bleeding di sekitar angka.
+   c. **REPLAY ATTACK CHECK**: Apakah screenshot terlihat seperti foto ulang dari layar lain (foto layar dari HP lain)?
 
 Format Output (wajib JSON murni tanpa pembungkus seperti \`\`\`json):
 {
   "status": "success" or "failed",
   "package": "basic" or "pro" or "none",
   "referral_code_generated": "JCV-XXXX-XXXX-XXXX" (hanya dibuat jika status success, gunakan huruf kapital acak & angka dengan pola JCV-[BASIC|PRO][A-Z0-9]{0,2}-[0-9A-Z]{4}-[0-9A-Z]{4}),
-  "message": "Pesan rincian sukses beserta konfirmasi pengiriman kode ke email pembeli, atau alasan penolakan secara mendetail jika gagal."
+  "message": "Pesan rincian sukses beserta konfirmasi pengiriman kode ke email pembeli, atau alasan penolakan secara mendetail jika gagal.",
+  "fraud_check": {
+    "ai_generated": "YES" / "NO" / "SUSPICIOUS",
+    "nominal_tampered": "YES" / "NO" / "SUSPICIOUS",
+    "details": "Penjelasan singkat hasil cek forensik dalam Bahasa Indonesia"
+  }
 }
 
 Contoh Respon Keberhasilan (Success):
@@ -1118,7 +1235,12 @@ Contoh Respon Keberhasilan (Success):
   "status": "success",
   "package": "pro",
   "referral_code_generated": "JCV-PRO4-9021-1182",
-  "message": "✓ Verifikasi Pembayaran Sukses! Kami telah memvalidasi transfer Anda untuk Paket PRO. Kode Aktivasi Anda adalah JCV-PRO4-9021-1182 dan telah otomatis dikirimkan ke email Anda. Silakan masukkan kode tersebut di kolom aktivasi untuk langsung menikmati fitur premium JagoCV."
+  "message": "✓ Verifikasi Pembayaran Sukses! Kami telah memvalidasi transfer Anda untuk Paket PRO. Kode Aktivasi Anda adalah JCV-PRO4-9021-1182 dan telah otomatis dikirimkan ke email Anda. Silakan masukkan kode tersebut di kolom aktivasi untuk langsung menikmati fitur premium JagoCV.",
+  "fraud_check": {
+    "ai_generated": "NO",
+    "nominal_tampered": "NO",
+    "details": "Gambar terlihat asli, tidak ada indikasi rekayasa AI atau edit nominal."
+  }
 }
 
 Contoh Respon Penolakan (Failed):
@@ -1126,7 +1248,12 @@ Contoh Respon Penolakan (Failed):
   "status": "failed",
   "package": "none",
   "referral_code_generated": "",
-  "message": "⚠ Verifikasi Gagal: Gambar yang Anda unggah merupakan kode barcode pembayaran QRIS, bukan bukti transaksi sukses transfer. Silakan lakukan pembayaran terlebih dahulu menggunakan aplikasi e-wallet atau perbankan Anda, kemudian unggah screenshot struk bukti transaksi berhasil agar sistem kami dapat memproses kode aktivasi Anda secara otomatis."
+  "message": "⚠ Verifikasi Gagal: Gambar yang Anda unggah merupakan kode barcode pembayaran QRIS, bukan bukti transaksi sukses transfer. Silakan lakukan pembayaran terlebih dahulu menggunakan aplikasi e-wallet atau perbankan Anda, kemudian unggah screenshot struk bukti transaksi berhasil agar sistem kami dapat memproses kode aktivasi Anda secara otomatis.",
+  "fraud_check": {
+    "ai_generated": "NO",
+    "nominal_tampered": "NO",
+    "details": "Gambar adalah kode QRIS, bukan bukti transfer."
+  }
 }`;
 
         const finalMimeType = screenshotMimeType || "image/png";
@@ -1164,6 +1291,10 @@ Contoh Respon Penolakan (Failed):
           aiPackage = parsed.package || "";
           aiMessage = parsed.message || "";
           generatedCodePlain = parsed.referral_code_generated || "";
+          fraudCheck = parsed.fraud_check || null;
+          if (fraudCheck.ai_generated || fraudCheck.nominal_tampered) {
+            console.log("[FRAUD CHECK]", JSON.stringify(fraudCheck));
+          }
 
           const normalizedPkg = String(aiPackage).toLowerCase();
           if (aiStatus === "success" && (normalizedPkg === "basic" || normalizedPkg === "pro")) {
@@ -1189,6 +1320,7 @@ Contoh Respon Penolakan (Failed):
         screenshotPresent: true,
         aiVerified: true,
         aiLog: aiMessage,
+        fraudCheck: fraudCheck || null,
       };
 
       // Ensure code is in a valid format or construct on server
@@ -1262,6 +1394,7 @@ Silakan masukkan kode tersebut pada halaman aktivasi untuk membuka fitur premium
         screenshotPresent: !!screenshotBase64,
         aiVerified: false,
         aiLog: aiMessage,
+        fraudCheck: fraudCheck || null,
       };
 
       await saveDatabase(dbData);

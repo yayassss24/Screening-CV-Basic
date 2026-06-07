@@ -485,13 +485,98 @@ app.get("/api/config", (req, res) => {
   });
 });
 
-// Admin: list all pending transactions
+// Admin: list all transactions
 app.get("/api/billing/admin/transactions", async (req, res) => {
   try {
     const dbData = await initDatabase();
     const allTx = dbData.transactions
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     res.json({ success: true, transactions: allTx });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin: confirm payment manually (via dashboard, no screenshot re-upload needed)
+app.post("/api/billing/admin/confirm-manual", async (req, res) => {
+  try {
+    const dbData = await initDatabase();
+    const { transactionId } = req.body;
+    if (!transactionId) {
+      return res.status(400).json({ error: "Transaction ID wajib disediakan." });
+    }
+    const tx = dbData.transactions.find(t => t.id === transactionId);
+    if (!tx) {
+      return res.status(404).json({ error: "Transaksi tidak ditemukan." });
+    }
+    if (tx.status === "PAID") {
+      return res.json({ success: true, message: "Transaksi ini sudah dikonfirmasi sebelumnya." });
+    }
+
+    tx.status = "PAID";
+
+    // Generate activation code
+    const chars = "0123456789";
+    const genPart = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+    const activationCode = `JCV-${tx.paket}-${genPart()}-${genPart()}`;
+
+    const hash = crypto.createHash("sha256").update(activationCode).digest("hex");
+
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 48);
+
+    const expireSub = new Date();
+    expireSub.setDate(expireSub.getDate() + 30);
+
+    const newCode = {
+      hash,
+      kodePlainForDbFileOnly: activationCode,
+      paket: tx.paket,
+      digunakan: false,
+      emailPenerima: tx.email,
+      tanggalCadaluwarsa: expireSub.toISOString().split("T")[0],
+      createdAt: new Date().toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    };
+
+    dbData.activation_codes.push(newCode);
+    tx.codePlainForDb = activationCode;
+    await saveDatabase(dbData);
+
+    console.log(`[ADMIN CONFIRM] ${tx.id} untuk ${tx.email} -> ${activationCode}`);
+
+    res.json({
+      success: true,
+      message: "Pembayaran dikonfirmasi oleh Admin. Kode aktivasi telah dibuat.",
+      activationCode,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin: reject payment
+app.post("/api/billing/admin/reject", async (req, res) => {
+  try {
+    const dbData = await initDatabase();
+    const { transactionId } = req.body;
+    if (!transactionId) {
+      return res.status(400).json({ error: "Transaction ID wajib disediakan." });
+    }
+    const tx = dbData.transactions.find(t => t.id === transactionId);
+    if (!tx) {
+      return res.status(404).json({ error: "Transaksi tidak ditemukan." });
+    }
+    if (tx.status === "PAID" || tx.status === "FAILED") {
+      return res.json({ success: true, message: "Transaksi ini sudah diproses sebelumnya." });
+    }
+
+    tx.status = "FAILED";
+    await saveDatabase(dbData);
+
+    console.log(`[ADMIN REJECT] ${tx.id} untuk ${tx.email}`);
+
+    res.json({ success: true, message: "Transaksi ditolak oleh Admin." });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -1955,6 +2040,161 @@ async function startServer() {
   if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
+
+    // Admin dashboard (protected by ADMIN_PASSWORD env var)
+    app.get("/admin", (req, res) => {
+      const adminPass = process.env.ADMIN_PASSWORD || "admin123";
+      res.send(`<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin Dashboard - JagoCV</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f1f5f9;color:#1e293b;padding:20px}
+h1{font-size:22px;margin-bottom:4px;color:#1e40af}
+.sub{color:#64748b;font-size:13px;margin-bottom:20px}
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.filters{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.filters button{padding:6px 14px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;cursor:pointer;font-size:12px;font-weight:600}
+.filters button.active{background:#1e40af;color:#fff;border-color:#1e40af}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+th,td{padding:10px 12px;text-align:left;font-size:12px;border-bottom:1px solid #e2e8f0}
+th{background:#f8fafc;font-weight:700;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+tr:hover{background:#f8fafc}
+.status{padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700}
+.status-pending{background:#fef3c7;color:#92400e}
+.status-paid{background:#d1fae5;color:#065f46}
+.status-failed{background:#fee2e2;color:#991b1b}
+.status-pending-verifikasi-manual{background:#e0e7ff;color:#3730a3}
+.btn{padding:6px 14px;border:none;border-radius:8px;cursor:pointer;font-size:11px;font-weight:700;transition:all .15s}
+.btn-confirm{background:#059669;color:#fff}
+.btn-confirm:hover{background:#047857}
+.btn-reject{background:#dc2626;color:#fff}
+.btn-reject:hover{background:#b91c1c}
+.btn-sm{padding:4px 10px;font-size:10px}
+.actions{display:flex;gap:4px}
+#login{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:80vh;gap:12px}
+#login input{padding:10px 14px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;width:260px}
+#login button{padding:10px 24px;background:#1e40af;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700}
+#login button:hover{background:#1d4ed8}
+#login .error{color:#dc2626;font-size:13px}
+.loading{text-align:center;padding:40px;color:#94a3b8;font-size:13px}
+code{background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:11px}
+.toast{position:fixed;bottom:20px;right:20px;padding:12px 20px;border-radius:10px;color:#fff;font-size:13px;font-weight:600;z-index:999;animation:fadeIn .3s}
+.toast-success{background:#059669}
+.toast-error{background:#dc2626}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div id="app">
+<div id="login">
+<h1 style="font-size:28px;margin-bottom:4px">🔐 Admin JagoCV</h1>
+<p class="sub" style="margin-bottom:8px">Masukkan password admin</p>
+<input type="password" id="pwdInput" placeholder="Password" onkeydown="if(event.key==='Enter')login()"/>
+<button onclick="login()">Masuk</button>
+<p class="error" id="loginError"></p>
+</div>
+</div>
+<script>
+const ADMIN_PASS = ${JSON.stringify(adminPass)};
+function login(){
+  const val=document.getElementById('pwdInput').value;
+  if(val===ADMIN_PASS){
+    document.getElementById('login').style.display='none';
+    loadTransactions();
+  } else {
+    document.getElementById('loginError').textContent='Password salah!';
+  }
+}
+let allTx=[];
+let filter='all';
+async function loadTransactions(){
+  document.getElementById('app').innerHTML='<div class="loading">Memuat transaksi...</div>';
+  try {
+    const r=await fetch('/api/billing/admin/transactions');
+    const d=await r.json();
+    if(d.success) allTx=d.transactions;
+    render();
+  } catch(e){
+    document.getElementById('app').innerHTML='<div class="loading" style="color:#dc2626">Gagal memuat: '+e.message+'</div>';
+  }
+}
+function render(){
+  const filtered=filter==='all'?allTx:allTx.filter(t=>t.status===filter);
+  const counts={all:allTx.length,pending:allTx.filter(t=>t.status==='PENDING'||t.status==='PENDING VERIFIKASI MANUAL').length,paid:allTx.filter(t=>t.status==='PAID').length,failed:allTx.filter(t=>t.status==='FAILED').length};
+  let html='<div class="header"><div><h1>📋 Dashboard Pembayaran</h1><p class="sub">'+allTx.length+' transaksi total</p></div><button class="btn btn-sm" style="background:#e2e8f0" onclick="location.reload()">🔄 Refresh</button></div>';
+  html+='<div class="filters">';
+  const labels={all:'Semua ('+counts.all+')',pending:'Pending ('+counts.pending+')',paid:'Lunas ('+counts.paid+')',failed:'Ditolak ('+counts.failed+')'};
+  Object.entries(labels).forEach(([k,v])=>{
+    html+='<button class="'+(filter===k?'active':'')+'" onclick="filter=\\''+k+'\\';render()">'+v+'</button>';
+  });
+  html+='</div>';
+  if(filtered.length===0){
+    html+='<div class="loading">Tidak ada transaksi</div>';
+  } else {
+    html+='<table><thead><tr><th>ID</th><th>Email</th><th>Paket</th><th>Nominal</th><th>Status</th><th>Tanggal</th><th>Aksi</th></tr></thead><tbody>';
+    filtered.forEach(tx=>{
+      const statusClass='status-'+tx.status.toLowerCase().replace(/ /g,'-');
+      const nominal='Rp '+(tx.nominal||0).toLocaleString('id-ID');
+      const date=new Date(tx.createdAt).toLocaleDateString('id-ID',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+      const canAct=tx.status==='PENDING'||tx.status==='PENDING VERIFIKASI MANUAL';
+      html+='<tr><td><code>'+tx.id.slice(0,16)+'</code></td><td>'+tx.email+'</td><td><strong>'+tx.paket+'</strong></td><td>'+nominal+'</td><td><span class="status '+statusClass+'">'+tx.status+'</span></td><td>'+date+'</td><td class="actions">';
+      if(canAct){
+        html+='<button class="btn btn-confirm btn-sm" onclick="confirmTx(\\''+tx.id+'\\')">✅ Konfirmasi</button>';
+        html+='<button class="btn btn-reject btn-sm" onclick="rejectTx(\\''+tx.id+'\\')">❌ Tolak</button>';
+      } else {
+        html+='<span style="color:#94a3b8;font-size:11px">—</span>';
+      }
+      html+='</td></tr>';
+    });
+    html+='</tbody></table>';
+  }
+  html+='<div id="toast"></div>';
+  document.getElementById('app').innerHTML=html;
+}
+async function confirmTx(id){
+  if(!confirm('Konfirmasi transaksi ini?'))return;
+  try {
+    const r=await fetch('/api/billing/admin/confirm-manual',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transactionId:id})});
+    const d=await r.json();
+    if(d.success){
+      showToast('✅ '+d.message,'success');
+      loadTransactions();
+    } else {
+      showToast('❌ '+(d.error||'Gagal'),'error');
+    }
+  } catch(e){
+    showToast('❌ '+e.message,'error');
+  }
+}
+async function rejectTx(id){
+  if(!confirm('Tolak transaksi ini?'))return;
+  try {
+    const r=await fetch('/api/billing/admin/reject',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transactionId:id})});
+    const d=await r.json();
+    if(d.success){
+      showToast('✅ Transaksi ditolak','success');
+      loadTransactions();
+    } else {
+      showToast('❌ '+(d.error||'Gagal'),'error');
+    }
+  } catch(e){
+    showToast('❌ '+e.message,'error');
+  }
+}
+function showToast(msg,type){
+  const t=document.getElementById('toast');
+  t.innerHTML='<div class="toast toast-'+type+'">'+msg+'</div>';
+  setTimeout(()=>t.innerHTML='',3000);
+}
+</script>
+</body>
+</html>`);
+    });
+
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });

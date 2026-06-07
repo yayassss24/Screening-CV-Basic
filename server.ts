@@ -277,7 +277,7 @@ async function callAIWithFallback(promptText: string, systemInstruction: string,
         responseMimeType: "application/json",
       },
     });
-    if (resp?.text) return resp;
+    if (resp?.text) return { text: resp.text };
   } catch (e: any) {
     console.warn("[FALLBACK] Gemini gagal:", e.message?.slice(0, 100));
   }
@@ -342,7 +342,7 @@ async function callAuditWithFallback(prompt: string, base64: string, mimeType: s
       ],
       config: { responseMimeType: "application/json" },
     });
-    if (resp?.text) return resp;
+    if (resp?.text) return { text: resp.text };
   } catch (e: any) {
     console.warn("[AUDIT FALLBACK] Gemini gagal:", e?.message?.slice(0, 100));
   }

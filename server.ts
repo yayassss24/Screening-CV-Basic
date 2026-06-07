@@ -1635,13 +1635,21 @@ SCHEMA JSON:
 }
     `.trim();
 
-    // --- HEMAT QUOTA: Cache check (cache hits skip semua rate limit) ---
+    // --- HEMAT QUOTA: Cache check (cache hits skip AI call, tetap kurangi quota) ---
     const cacheKey = generateCacheKey(cvText, jobDescription, email);
     const cacheForceRefresh = req.body.forceRefresh === true;
     if (!cacheForceRefresh) {
       const cached = screeningCache.get(cacheKey);
       if (cached) {
         console.log(`[CACHE HIT] ${email} - menggunakan hasil screening sebelumnya`);
+        // Tetap kurangi quota walau cache hit
+        if (userProfile.screeningSisa !== "Unlimited") {
+          const ssc = Number(userProfile.screeningSisa) || 0;
+          userProfile.screeningSisa = Math.max(-1, ssc - 1);
+        }
+        userProfile.screeningTotalCount += 1;
+        await saveDatabase(dbData);
+
         const existingAnalysis = dbData.analyses.find(a => a.email === email && a.data?.meta?.posisi === cached.result.meta?.posisi);
         return res.json({
           success: true,

@@ -21,7 +21,6 @@ import {
   Check, 
   RefreshCw, 
   KeyRound,
-  ExternalLink,
   MessageSquare,
   Send,
   Upload,
@@ -3159,10 +3158,6 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center gap-4">
           <p>© 2026 JagoCV AI. Hak Cipta Dilindungi Undang-Undang.</p>
           <div className="flex gap-4">
-            <a href="https://aistudio.google.com" target="_blank" rel="noopener noreferrer" className="hover:text-slate-600 flex items-center gap-1 transition-all">
-              Google AI Studio <ExternalLink className="w-3" />
-            </a>
-            <span>•</span>
             <span className="text-slate-500 font-semibold uppercase tracking-widest text-[9px]">spark local database</span>
           </div>
         </div>

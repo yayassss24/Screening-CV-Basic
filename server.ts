@@ -1068,96 +1068,64 @@ app.post("/api/billing/audit-payment", async (req, res) => {
     }
 
     const finalMimeType = screenshotMimeType || "image/png";
-    const nominalHint = expectedNominal ? `Rp ${Number(expectedNominal).toLocaleString("id-ID")}` : "tidak disebutkan";
+    const nominalStr = expectedNominal ? `Rp ${Number(expectedNominal).toLocaleString("id-ID")}` : "tidak disebutkan";
 
-    const prompt = `Anda adalah "JagoCV Payment Forensic Auditor" — spesialis keamanan pembayaran digital yang bertugas mengaudit bukti transfer apakah asli atau hasil rekayasa.
+    const prompt = `Anda adalah "JagoCV Payment Forensic Auditor". Analisis screenshot bukti bayar ini:
 
-Tugas Anda: Analisis screenshot bukti pembayaran ini secara forensik dan berikan LAPORAN AUDIT mendetail.
+1. AI GENERATION CHECK: Apakah ini hasil AI? Cari pixel-perfect edges, missing noise, artifacts, inconsistent lighting.
+2. NOMINAL TAMPERING CHECK: Apakah nominal diedit? Cari font mismatch, alignment issues, pixel bleeding.
+3. PAYMENT VALIDATION: Apakah transaksi BERHASIL? Merchant JagoCV? Nominal sesuai ${nominalStr}?
 
-### 1. AI GENERATION DETECTION (Deteksi Gambar Buatan AI)
-Periksa tanda-tanda gambar dihasilkan oleh AI:
-- **Pixel-perfect edges**: Tepi yang terlalu sempurna, tanpa noise natural
-- **Inconsistent lighting**: Bayangan/cahaya tidak konsisten antar elemen
-- **Unnatural text rendering**: Teks yang terlalu rapi atau sebaliknya kacau
-- **Missing natural noise**: Tidak ada grain/noise kamera yang natural
-- **Artifacts**: Artefak kompresi aneh di area transisi teks-gambar
-- **Logical inconsistencies**: Nominal, tanggal, atau detail lain yang tidak masuk akal
-
-### 2. NOMINAL TAMPERING DETECTION (Deteksi Edit Nominal)
-Periksa apakah nominal uang diedit/dimanipulasi:
-- **Font mismatch**: Font nominal berbeda dengan teks lain di sekitarnya
-- **Alignment issues**: Posisi nominal tidak sejajar dengan elemen lain
-- **Color discrepancy**: Warna nominal berbeda dari warna asli aplikasi
-- **Shadow inconsistency**: Bayangan nominal tidak cocok dengan bayangan sekitarnya
-- **Pixel bleeding**: Ada pixel aneh di sekitar angka nominal
-- **Clone stamp artifacts**: Tanda-tanda penggunaan clone stamp/spot healing
-
-### 3. PAYMENT VALIDATION (Validasi Pembayaran)
-- Apakah screenshot menunjukkan transaksi BERHASIL / SUKSES / SUCCESS / SETTLED?
-- Apakah merchant/penerima adalah "JagoCV"?
-- Apakah nominal sesuai dengan yang diharapkan (${nominalHint})?
-- Apakah tanggal/waktu transaksi wajar dan masuk akal?
-
-### 4. OVERALL VERDICT
-Berdasarkan analisis di atas, berikan kesimpulan akhir.
-
-Format Output (wajib JSON murni tanpa markdown wrapper):
+Output JSON:
 {
-  "overall_verdict": "AUTHENTIC" | "SUSPICIOUS" | "FAKE",
-  "confidence_score": 0-100,
-  "ai_generation": {
-    "score": 0-100,
-    "indicators": ["string"],
-    "conclusion": "string"
-  },
-  "nominal_tampering": {
-    "score": 0-100,
-    "indicators": ["string"],
-    "conclusion": "string",
-    "detected_nominal": "string | null"
-  },
-  "payment_validation": {
-    "is_successful": true | false,
-    "merchant_match": true | false,
-    "nominal_match": true | false,
-    "details": "string"
-  },
-  "summary": "string (penjelasan panjang dalam Bahasa Indonesia)"
+  "overall_verdict": "AUTHENTIC"|"SUSPICIOUS"|"FAKE",
+  "ai_generation": { "score": 0-100, "indicators": ["..."], "conclusion": "..." },
+  "nominal_tampering": { "score": 0-100, "indicators": ["..."], "conclusion": "...", "detected_nominal": "..." },
+  "payment_validation": { "is_successful": true/false, "merchant_match": true/false, "nominal_match": true/false },
+  "summary": "..."
 }`;
 
-    const geminiRes = await callGeminiWithRetry({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                mimeType: finalMimeType,
-                data: screenshotBase64,
-              },
-            },
-          ],
-        },
-      ],
-      config: {
-        responseMimeType: "application/json",
-      },
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
 
-    if (geminiRes && geminiRes.text) {
-      let textToParse = geminiRes.text.trim();
-      if (textToParse.startsWith("```")) {
-        textToParse = textToParse.replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
+    try {
+      const geminiRes = await callGeminiWithRetry({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType: finalMimeType,
+                  data: screenshotBase64,
+                },
+              },
+            ],
+          },
+        ],
+        config: {
+          responseMimeType: "application/json",
+          abortSignal: controller.signal,
+        },
+      });
+
+      if (geminiRes && geminiRes.text) {
+        let textToParse = geminiRes.text.trim();
+        if (textToParse.startsWith("```")) {
+          textToParse = textToParse.replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
+        }
+        const result = JSON.parse(textToParse);
+        return res.json({ success: true, audit: result });
       }
-      const result = JSON.parse(textToParse);
-      return res.json({ success: true, audit: result });
+    } finally {
+      clearTimeout(timeout);
     }
 
     res.status(500).json({ success: false, error: "Gagal mendapatkan respons dari AI." });
   } catch (error: any) {
-    console.error("[AUDIT PAYMENT ERROR]", error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error("[AUDIT PAYMENT ERROR]", error?.message || error);
+    res.status(500).json({ success: false, error: error?.message || "Internal server error" });
   }
 });
 

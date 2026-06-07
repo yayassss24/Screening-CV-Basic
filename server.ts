@@ -18,8 +18,9 @@ async function initFirestoreAdmin() {
   const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (!sa) { console.warn("[FIRESTORE] FIREBASE_SERVICE_ACCOUNT not set"); return; }
   try {
-    const fbAdmin = await import("firebase-admin");
-    if (!fbAdmin.apps.length) {
+    const { initializeApp, getApps, cert } = await import("firebase-admin/app");
+    const { getFirestore } = await import("firebase-admin/firestore");
+    if (!getApps().length) {
       let serviceAccount: any;
       try {
         serviceAccount = JSON.parse(sa);
@@ -29,11 +30,11 @@ async function initFirestoreAdmin() {
         console.error("[FIRESTORE] First 200 chars:", sa.substring(0, 200));
         return;
       }
-      fbAdmin.initializeApp({
-        credential: fbAdmin.credential.cert(serviceAccount),
+      initializeApp({
+        credential: cert(serviceAccount),
       });
     }
-    firestoreDb = fbAdmin.firestore();
+    firestoreDb = getFirestore();
     adminAppInitialized = true;
     console.log("[FIRESTORE] Firebase Admin initialized");
   } catch (e: any) {

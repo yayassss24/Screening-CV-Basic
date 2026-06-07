@@ -461,7 +461,7 @@ export default function App() {
             if (auditErr.message?.includes("mendeteksi indikasi kecurangan")) {
               throw auditErr; // Block payment on fraud detection
             }
-            console.warn("Audit payment skipped (graceful):", auditErr.message);
+            // Audit unavailable (quota, timeout, etc.) — continue payment
           }
 
           // 2. Auto-confirm payment (bypass AI verification)

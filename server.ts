@@ -1116,8 +1116,20 @@ Output JSON:
 
     res.status(500).json({ success: false, error: "Gagal mendapatkan respons dari AI." });
   } catch (error: any) {
-    console.error("[AUDIT PAYMENT ERROR]", error?.message || error);
-    res.status(500).json({ success: false, error: error?.message || "Internal server error" });
+    const errMsg = error?.message || String(error || "");
+    const isQuotaError = errMsg.toLowerCase().includes("quota") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("429");
+    if (isQuotaError) {
+      console.warn("[AUDIT PAYMENT] Quota AI habis, audit dilewati.");
+      return res.json({ success: true, audit_unavailable: true, audit: {
+        overall_verdict: "UNAVAILABLE",
+        ai_generation: { score: 0, indicators: [], conclusion: "Audit tidak tersedia: quota AI habis." },
+        nominal_tampering: { score: 0, indicators: [], conclusion: "Audit tidak tersedia: quota AI habis." },
+        payment_validation: { is_successful: null, merchant_match: null, nominal_match: null, details: "Audit tidak tersedia karena quota AI habis." },
+        summary: "Sistem audit forensik tidak dapat dijalankan saat ini karena kuota AI telah habis. Silakan coba lagi nanti atau hubungi admin."
+      }});
+    }
+    console.error("[AUDIT PAYMENT ERROR]", errMsg);
+    res.status(500).json({ success: false, error: errMsg });
   }
 });
 

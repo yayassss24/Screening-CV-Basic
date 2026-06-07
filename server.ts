@@ -2035,16 +2035,10 @@ JD: ${jobDescription.slice(0, 1500)}
   }
 });
 
-// Serve static assets in production, setup Vite middleware in development
-async function startServer() {
-  if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-
-    // Admin dashboard (protected by ADMIN_PASSWORD env var)
-    app.get("/admin", (req, res) => {
-      const adminPass = process.env.ADMIN_PASSWORD || "admin123";
-      res.send(`<!DOCTYPE html>
+// Admin dashboard (protected by ADMIN_PASSWORD env var)
+app.get("/admin", (req, res) => {
+  const adminPass = process.env.ADMIN_PASSWORD || "admin123";
+  res.send(`<!DOCTYPE html>
 <html lang="id">
 <head>
 <meta charset="UTF-8">
@@ -2193,8 +2187,13 @@ function showToast(msg,type){
 </script>
 </body>
 </html>`);
-    });
+});
 
+// Serve static assets in production, setup Vite middleware in development
+async function startServer() {
+  if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });

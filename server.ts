@@ -264,22 +264,15 @@ async function saveDatabase(data: DatabaseStructure) {
       if (!hasRealData) {
         console.warn("[FIRESTORE] Guard activated: skipping Firestore write (fresh fallback DB detected)");
       } else {
+        // Batch 1: main data (transactions without screenshots, users, codes, analyses)
         const batch = firestoreDb.batch();
         
         for (const tx of data.transactions) {
-          // Strip screenshot data to avoid exceeding Firestore 1 MiB per-document limit
           const { screenshotBase64, screenshotMimeType, ...txRest } = tx;
           batch.set(firestoreDb.collection("transactions").doc(tx.id), cleanForFirestore({
             ...txRest,
             hasScreenshot: !!screenshotBase64,
           }));
-          // Store screenshot separately if present
-          if (screenshotBase64) {
-            batch.set(firestoreDb.collection("screenshots").doc(tx.id), cleanForFirestore({
-              screenshotBase64,
-              screenshotMimeType: screenshotMimeType || "image/png",
-            }));
-          }
         }
         
         for (const [email, profile] of Object.entries(data.users)) {
@@ -297,6 +290,28 @@ async function saveDatabase(data: DatabaseStructure) {
         
         await batch.commit();
         console.log(`[FIRESTORE] Persisted ${data.transactions.length} tx, ${Object.keys(data.users).length} users`);
+        
+        // Batch 2: screenshots separately (may fail if >1 MiB, but main data already saved)
+        try {
+          const ssBatch = firestoreDb.batch();
+          let hasScreenshots = false;
+          for (const tx of data.transactions) {
+            if (tx.screenshotBase64) {
+              ssBatch.set(firestoreDb.collection("screenshots").doc(tx.id), cleanForFirestore({
+                screenshotBase64: tx.screenshotBase64,
+                screenshotMimeType: tx.screenshotMimeType || "image/png",
+              }));
+              hasScreenshots = true;
+            }
+          }
+          if (hasScreenshots) {
+            await ssBatch.commit();
+            console.log("[FIRESTORE] Screenshots saved");
+          }
+        } catch (ssErr: any) {
+          console.warn("[FIRESTORE] Screenshot batch failed (data already saved):", ssErr.message);
+        }
+        
         return;
       }
     } catch (e: any) {

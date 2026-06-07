@@ -235,6 +235,30 @@ function saveGuestProfile(p: UserProfile) {
   localStorage.setItem("jagocv_guest_profile", JSON.stringify(p));
 }
 
+const GUEST_ANALYSES_KEY = "jagocv_guest_analyses";
+const GUEST_ACTIVE_RESULT_KEY = "jagocv_guest_active_result";
+
+function loadGuestAnalyses(): SavedAnalysis[] {
+  try {
+    const saved = localStorage.getItem(GUEST_ANALYSES_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed as SavedAnalysis[];
+    }
+  } catch {}
+  return [];
+}
+
+function saveGuestAnalysis(item: SavedAnalysis) {
+  try {
+    const list = loadGuestAnalyses();
+    const idx = list.findIndex(a => a.id === item.id);
+    if (idx >= 0) list[idx] = item;
+    else list.unshift(item);
+    localStorage.setItem(GUEST_ANALYSES_KEY, JSON.stringify(list));
+  } catch {}
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -250,7 +274,12 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("");
   const [activeTab, setActiveTab] = useState<"screen" | "history">("screen");
-  const [activeResult, setActiveResult] = useState<JagoCVAnalysisResult | null>(null);
+  const [activeResult, setActiveResult] = useState<JagoCVAnalysisResult | null>(() => {
+    try {
+      const saved = localStorage.getItem(GUEST_ACTIVE_RESULT_KEY);
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
+  });
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
   // History report records
@@ -606,6 +635,13 @@ export default function App() {
     return () => unsubscribe();
   }, [currentUser]);
 
+  // Persist activeResult to localStorage for guest users
+  useEffect(() => {
+    if (!currentUser && activeResult) {
+      localStorage.setItem(GUEST_ACTIVE_RESULT_KEY, JSON.stringify(activeResult));
+    }
+  }, [activeResult, currentUser]);
+
   // Monitor and list users reports history (Dual-mode: Firestore for Auth users, REST API for Guests)
   useEffect(() => {
     const activeEmail = currentUser?.email || profile.email;
@@ -626,14 +662,26 @@ export default function App() {
       });
       return () => unsubscribe();
     } else {
-      // Local server API fallback for Guest users
+      // Load guest analyses from localStorage first (immediate)
+      setHistoryList(loadGuestAnalyses());
+
+      // Then sync with server in background
       const fetchApiHistory = async () => {
         try {
           const response = await fetch(`/api/ats/history?email=${encodeURIComponent(activeEmail)}`);
           if (response.ok) {
             const data = await response.json();
-            if (data.success && data.history) {
-              setHistoryList(data.history);
+            if (data.success && data.history && data.history.length > 0) {
+              // Merge server data with local (server may have newer items)
+              const localList = loadGuestAnalyses();
+              const serverIds = new Set(data.history.map((a: SavedAnalysis) => a.id));
+              const merged = [...data.history];
+              for (const item of localList) {
+                if (!serverIds.has(item.id)) merged.push(item);
+              }
+              merged.sort((a, b) => new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime());
+              setHistoryList(merged);
+              localStorage.setItem(GUEST_ANALYSES_KEY, JSON.stringify(merged));
             }
           }
         } catch (err) {
@@ -965,30 +1013,26 @@ export default function App() {
         setIsCachedResult(!!resData.cached);
 
         // Safe synchronization write to Firestore if logged in
+        const freshAnalysisId = resData.analysisId;
+        const savedItem = {
+          id: freshAnalysisId,
+          email: currentUser?.email || profile.email,
+          paket: resData.profile?.paket || profile.paket,
+          tanggal: new Date().toISOString().split("T")[0],
+          cvKandidatName: cvFileName,
+          jobTitle: resData.data.meta?.posisi || "Posisi Lamaran",
+          skorAkhir: resData.data.hireability_score?.nilai || 75,
+          data: resData.data,
+        };
         if (currentUser) {
-          const freshAnalysisId = resData.analysisId;
-          const savedItem = {
-            id: freshAnalysisId,
-            email: currentUser.email || profile.email,
-            paket: resData.profile?.paket || profile.paket,
-            tanggal: new Date().toISOString().split("T")[0],
-            cvKandidatName: cvFileName,
-            jobTitle: resData.data.meta?.posisi || "Posisi Lamaran",
-            skorAkhir: resData.data.hireability_score?.nilai || 75,
-            data: resData.data,
-          };
-          
           await setDoc(doc(db, "saved_analyses", freshAnalysisId), savedItem);
         } else {
-          // Fallback refetch API list for Guest user profile
-          const activeEmail = profile.email;
-          const histResponse = await fetch(`/api/ats/history?email=${encodeURIComponent(activeEmail)}`);
-          if (histResponse.ok) {
-            const histData = await histResponse.json();
-            if (histData.success && histData.history) {
-              setHistoryList(histData.history);
-            }
-          }
+          // Save to localStorage for guest users (serverless /tmp is ephemeral on Vercel)
+          saveGuestAnalysis(savedItem as SavedAnalysis);
+          setHistoryList(prev => {
+            const filtered = prev.filter(a => a.id !== savedItem.id);
+            return [savedItem as SavedAnalysis, ...filtered];
+          });
         }
 
         // Use profile from response for immediate update

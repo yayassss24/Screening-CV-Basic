@@ -83,24 +83,21 @@ async function sendInvoiceEmail(to: string, subject: string, html: string, pdfBu
   }
 }
 
-// Send WhatsApp notification via Wablas API
+// Send WhatsApp notification via Fonnte API
 async function sendWaNotification(phone: string, message: string) {
   const token = process.env.WA_API_KEY;
   if (!token) { console.warn("[WA] WA_API_KEY tidak di-set, lewati notifikasi WhatsApp"); return; }
-  const instance = process.env.WA_INSTANCE || "solo";
-  const url = `https://${instance}.wablas.com/api/send-message`;
-  const authHeader = token.startsWith("Bearer ") ? token : `Bearer ${token}`;
   try {
-    const res = await fetch(url, {
+    const res = await fetch("https://api.fonnte.com/send", {
       method: "POST",
       headers: {
-        Authorization: authHeader,
+        Authorization: token,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ phone, message, secret: false }),
+      body: JSON.stringify({ target: phone, message, countryCode: "62" }),
     });
     const result = await res.json();
-    if (result.status === true || result.status === "true") {
+    if (result.status === true) {
       console.log(`[WA TERKIRIM] ke ${phone}`);
     } else {
       console.warn("[WA GAGAL]", result);
@@ -2476,7 +2473,6 @@ app.get("/api/debug/firestore", async (req, res) => {
     hasApiKey: !!process.env.WA_API_KEY,
     apiKeyLength: process.env.WA_API_KEY?.length || 0,
     apiKeyPreview: process.env.WA_API_KEY ? process.env.WA_API_KEY.substring(0, 8) + "..." : null,
-    instance: process.env.WA_INSTANCE || "solo",
   };
   if (firestoreDb) {
     try {

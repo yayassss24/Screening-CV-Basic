@@ -743,20 +743,6 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
         }
         setProfile(data.profile);
         if (!currentUser) saveGuestProfile(data.profile);
-
-        // Keep Firestore users table up to date with server-side database
-        if (currentUser) {
-          const fsProfile: any = {
-            email: data.profile.email,
-            paket: data.profile.paket,
-            screeningSisa: data.profile.screeningSisa,
-            screeningTotalCount: data.profile.screeningTotalCount,
-          };
-          if (data.profile.kodeAktif) fsProfile.kodeAktif = data.profile.kodeAktif;
-          if (data.profile.tanggalBerlaku) fsProfile.tanggalBerlaku = data.profile.tanggalBerlaku;
-
-          await setDoc(doc(db, "users", currentUser.uid), fsProfile);
-        }
       }
     } catch (err) {
       console.error("Gagal memuat profil: ", err);

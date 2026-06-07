@@ -11,6 +11,7 @@ import OpenAI from "openai";
 // Firebase Admin SDK (server-side, for persistent Firestore storage on Vercel)
 let firestoreDb: any = null;
 let adminAppInitialized = false;
+let firestoreDisabled = false; // Cache: don't retry if Firestore unavailable
 
 async function initFirestoreAdmin() {
   if (adminAppInitialized) return;
@@ -29,6 +30,7 @@ async function initFirestoreAdmin() {
     console.log("[FIRESTORE] Firebase Admin initialized");
   } catch (e: any) {
     console.warn("[FIRESTORE] Init failed, using file fallback:", e.message);
+    firestoreDisabled = true;
   }
 }
 
@@ -138,7 +140,7 @@ interface DatabaseStructure {
 // Ensure the local sandbox database is initialized
 async function initDatabase(): Promise<DatabaseStructure> {
   // On Vercel, try Firestore first for persistent storage
-  if (firestoreDb) {
+  if (firestoreDb && !firestoreDisabled) {
     try {
       const [txSnap, usersSnap, codesSnap, analysesSnap] = await Promise.all([
         firestoreDb.collection("transactions").get(),
@@ -162,7 +164,8 @@ async function initDatabase(): Promise<DatabaseStructure> {
       console.log(`[FIRESTORE] Loaded ${transactions.length} tx, ${Object.keys(users).length} users, ${activation_codes.length} codes, ${analyses.length} analyses`);
       return { users, activation_codes, analyses, transactions };
     } catch (e: any) {
-      console.error("[FIRESTORE] Read failed, falling back to file:", e.message);
+      console.error("[FIRESTORE] Read failed, disabling Firestore:", e.message);
+      firestoreDisabled = true; // Don't retry on subsequent requests
     }
   }
   
@@ -200,7 +203,7 @@ async function initDatabase(): Promise<DatabaseStructure> {
 
 async function saveDatabase(data: DatabaseStructure) {
   // On Vercel, persist to Firestore
-  if (firestoreDb) {
+  if (firestoreDb && !firestoreDisabled) {
     try {
       const batch = firestoreDb.batch();
       
@@ -226,7 +229,8 @@ async function saveDatabase(data: DatabaseStructure) {
       console.log(`[FIRESTORE] Persisted ${data.transactions.length} tx, ${Object.keys(data.users).length} users`);
       return;
     } catch (e: any) {
-      console.error("[FIRESTORE] Write failed, falling back to file:", e.message);
+      console.error("[FIRESTORE] Write failed, disabling Firestore:", e.message);
+      firestoreDisabled = true;
     }
   }
   

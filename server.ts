@@ -215,6 +215,11 @@ async function initDatabase(): Promise<DatabaseStructure> {
   }
 }
 
+// Strip undefined fields — Firestore batch.set() throws on undefined values
+function cleanForFirestore<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj));
+}
+
 async function saveDatabase(data: DatabaseStructure) {
   // On Vercel, persist to Firestore
   if (firestoreDb) {
@@ -235,21 +240,32 @@ async function saveDatabase(data: DatabaseStructure) {
         const batch = firestoreDb.batch();
         
         for (const tx of data.transactions) {
-          const txData = { ...tx };
-          batch.set(firestoreDb.collection("transactions").doc(tx.id), txData);
+          // Strip screenshot data to avoid exceeding Firestore 1 MiB per-document limit
+          const { screenshotBase64, screenshotMimeType, ...txRest } = tx;
+          batch.set(firestoreDb.collection("transactions").doc(tx.id), cleanForFirestore({
+            ...txRest,
+            hasScreenshot: !!screenshotBase64,
+          }));
+          // Store screenshot separately if present
+          if (screenshotBase64) {
+            batch.set(firestoreDb.collection("screenshots").doc(tx.id), cleanForFirestore({
+              screenshotBase64,
+              screenshotMimeType: screenshotMimeType || "image/png",
+            }));
+          }
         }
         
         for (const [email, profile] of Object.entries(data.users)) {
-          batch.set(firestoreDb.collection("users").doc(email), profile);
+          batch.set(firestoreDb.collection("users").doc(email), cleanForFirestore(profile));
         }
         
         for (const code of data.activation_codes) {
           const docId = code.hash || crypto.createHash("sha256").update(code.kodePlainForDbFileOnly).digest("hex");
-          batch.set(firestoreDb.collection("activation_codes").doc(docId), code);
+          batch.set(firestoreDb.collection("activation_codes").doc(docId), cleanForFirestore(code));
         }
         
         for (const analysis of data.analyses) {
-          batch.set(firestoreDb.collection("analyses").doc(analysis.id), analysis);
+          batch.set(firestoreDb.collection("analyses").doc(analysis.id), cleanForFirestore(analysis));
         }
         
         await batch.commit();
@@ -614,7 +630,7 @@ app.get("/api/billing/admin/transactions", async (req, res) => {
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .map(tx => ({
         ...tx,
-        hasScreenshot: !!tx.screenshotBase64,
+        hasScreenshot: !!(tx as any).hasScreenshot || !!tx.screenshotBase64,
         screenshotBase64: undefined, // don't send raw base64 in list
       }));
     res.json({ success: true, transactions: allTx });
@@ -711,6 +727,21 @@ app.post("/api/billing/admin/reject", async (req, res) => {
 // Admin: view payment screenshot
 app.get("/api/billing/admin/screenshot/:transactionId", async (req, res) => {
   try {
+    // Try Firestore screenshots collection first
+    if (firestoreDb) {
+      try {
+        const snap = await firestoreDb.collection("screenshots").doc(req.params.transactionId).get();
+        if (snap.exists) {
+          const data = snap.data()!;
+          const mimeType = data.screenshotMimeType || "image/png";
+          const imgBuffer = Buffer.from(data.screenshotBase64, "base64");
+          res.set("Content-Type", mimeType);
+          res.set("Content-Disposition", "inline");
+          return res.send(imgBuffer);
+        }
+      } catch { /* fall through to file */ }
+    }
+    // Fallback: local db.json
     const dbData = await initDatabase();
     const tx = dbData.transactions.find(t => t.id === req.params.transactionId);
     if (!tx || !tx.screenshotBase64) {

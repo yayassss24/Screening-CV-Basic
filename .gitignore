@@ -10,3 +10,4 @@ db.json
 *.traineddata
 public/*
 !public/*.png
+.vercel

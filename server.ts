@@ -89,11 +89,12 @@ async function sendWaNotification(phone: string, message: string) {
   if (!token) { console.warn("[WA] WA_API_KEY tidak di-set, lewati notifikasi WhatsApp"); return; }
   const instance = process.env.WA_INSTANCE || "solo";
   const url = `https://${instance}.wablas.com/api/send-message`;
+  const authHeader = token.startsWith("Bearer ") ? token : `Bearer ${token}`;
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: token,
+        Authorization: authHeader,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ phone, message, secret: false }),
@@ -2454,6 +2455,13 @@ app.get("/api/debug/firestore", async (req, res) => {
     serviceAccountLength: process.env.FIREBASE_SERVICE_ACCOUNT?.length || 0,
     vercel: !!process.env.VERCEL,
     nodeEnv: process.env.NODE_ENV,
+  };
+  status.wa = {
+    adminWA: process.env.ADMIN_WA || "(not set)",
+    hasApiKey: !!process.env.WA_API_KEY,
+    apiKeyLength: process.env.WA_API_KEY?.length || 0,
+    apiKeyPreview: process.env.WA_API_KEY ? process.env.WA_API_KEY.substring(0, 8) + "..." : null,
+    instance: process.env.WA_INSTANCE || "solo",
   };
   if (firestoreDb) {
     try {

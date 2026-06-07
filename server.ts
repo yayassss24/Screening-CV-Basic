@@ -11,7 +11,6 @@ import OpenAI from "openai";
 // Firebase Admin SDK (server-side, for persistent Firestore storage on Vercel)
 let firestoreDb: any = null;
 let adminAppInitialized = false;
-let firestoreDisabled = false; // Cache: don't retry if Firestore unavailable
 
 async function initFirestoreAdmin() {
   if (adminAppInitialized) return;
@@ -30,7 +29,6 @@ async function initFirestoreAdmin() {
     console.log("[FIRESTORE] Firebase Admin initialized");
   } catch (e: any) {
     console.warn("[FIRESTORE] Init failed, using file fallback:", e.message);
-    firestoreDisabled = true;
   }
 }
 
@@ -116,6 +114,8 @@ interface JagoTransaction {
   verifiedIdentity: boolean;
   codePlainForDb?: string;
   screenshotHash?: string;
+  screenshotBase64?: string;
+  screenshotMimeType?: string;
   manualClaimDetails?: any;
 }
 
@@ -140,7 +140,7 @@ interface DatabaseStructure {
 // Ensure the local sandbox database is initialized
 async function initDatabase(): Promise<DatabaseStructure> {
   // On Vercel, try Firestore first for persistent storage
-  if (firestoreDb && !firestoreDisabled) {
+  if (firestoreDb) {
     try {
       const [txSnap, usersSnap, codesSnap, analysesSnap] = await Promise.all([
         firestoreDb.collection("transactions").get(),
@@ -164,8 +164,7 @@ async function initDatabase(): Promise<DatabaseStructure> {
       console.log(`[FIRESTORE] Loaded ${transactions.length} tx, ${Object.keys(users).length} users, ${activation_codes.length} codes, ${analyses.length} analyses`);
       return { users, activation_codes, analyses, transactions };
     } catch (e: any) {
-      console.error("[FIRESTORE] Read failed, disabling Firestore:", e.message);
-      firestoreDisabled = true; // Don't retry on subsequent requests
+      console.error("[FIRESTORE] Read failed, falling back to file:", e.message);
     }
   }
   
@@ -203,7 +202,7 @@ async function initDatabase(): Promise<DatabaseStructure> {
 
 async function saveDatabase(data: DatabaseStructure) {
   // On Vercel, persist to Firestore
-  if (firestoreDb && !firestoreDisabled) {
+  if (firestoreDb) {
     try {
       const batch = firestoreDb.batch();
       
@@ -229,8 +228,7 @@ async function saveDatabase(data: DatabaseStructure) {
       console.log(`[FIRESTORE] Persisted ${data.transactions.length} tx, ${Object.keys(data.users).length} users`);
       return;
     } catch (e: any) {
-      console.error("[FIRESTORE] Write failed, disabling Firestore:", e.message);
-      firestoreDisabled = true;
+      console.error("[FIRESTORE] Write failed, falling back to file:", e.message);
     }
   }
   
@@ -584,7 +582,12 @@ app.get("/api/billing/admin/transactions", async (req, res) => {
   try {
     const dbData = await initDatabase();
     const allTx = dbData.transactions
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .map(tx => ({
+        ...tx,
+        hasScreenshot: !!tx.screenshotBase64,
+        screenshotBase64: undefined, // don't send raw base64 in list
+      }));
     res.json({ success: true, transactions: allTx });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -671,6 +674,24 @@ app.post("/api/billing/admin/reject", async (req, res) => {
     console.log(`[ADMIN REJECT] ${tx.id} untuk ${tx.email}`);
 
     res.json({ success: true, message: "Transaksi ditolak oleh Admin." });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin: view payment screenshot
+app.get("/api/billing/admin/screenshot/:transactionId", async (req, res) => {
+  try {
+    const dbData = await initDatabase();
+    const tx = dbData.transactions.find(t => t.id === req.params.transactionId);
+    if (!tx || !tx.screenshotBase64) {
+      return res.status(404).json({ error: "Screenshot tidak ditemukan." });
+    }
+    const mimeType = tx.screenshotMimeType || "image/png";
+    const imgBuffer = Buffer.from(tx.screenshotBase64, "base64");
+    res.set("Content-Type", mimeType);
+    res.set("Content-Disposition", "inline");
+    res.send(imgBuffer);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -961,7 +982,7 @@ function generateCacheKey(cv: string, jd: string, email: string): string {
 app.post("/api/billing/create-transaction", async (req, res) => {
   try {
     const dbData = await initDatabase();
-    const { email, paket, source } = req.body;
+    const { email, paket, source, screenshotBase64, screenshotMimeType } = req.body;
 
     if (!email || (paket !== "BASIC" && paket !== "PRO" && paket !== "TRIAL")) {
       return res.status(400).json({ error: "Email dan paket yang valid (BASIC, PRO, atau TRIAL) wajib disertakan." });
@@ -980,6 +1001,8 @@ app.post("/api/billing/create-transaction", async (req, res) => {
       createdAt: new Date().toISOString(),
       resendCount: 0,
       verifiedIdentity: false,
+      screenshotBase64: screenshotBase64 || undefined,
+      screenshotMimeType: screenshotMimeType || undefined,
     };
 
     dbData.transactions.push(newTx);
@@ -2237,10 +2260,14 @@ function render(){
       const nominal='Rp '+(tx.nominal||0).toLocaleString('id-ID');
       const date=new Date(tx.createdAt).toLocaleDateString('id-ID',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
       const canAct=tx.status==='PENDING'||tx.status==='PENDING VERIFIKASI MANUAL';
+      const hasScreenshot = !!tx.screenshotBase64;
       html+='<tr><td><code>'+tx.id.slice(0,16)+'</code></td><td>'+tx.email+'</td><td><strong>'+tx.paket+'</strong></td><td>'+nominal+'</td><td><span class="status '+statusClass+'">'+tx.status+'</span></td><td>'+date+'</td><td class="actions">';
+      if(hasScreenshot){
+        html+='<a href="/api/billing/admin/screenshot/'+encodeURIComponent(tx.id)+'" target="_blank" class="btn btn-sm" style="background:#6366f1;color:#fff;text-decoration:none">📷 Lihat</a>';
+      }
       if(canAct){
-        html+='<button class="btn btn-confirm btn-sm" onclick="confirmTx(\\''+tx.id+'\\')">✅ Konfirmasi</button>';
-        html+='<button class="btn btn-reject btn-sm" onclick="rejectTx(\\''+tx.id+'\\')">❌ Tolak</button>';
+        html+='<button class="btn btn-confirm btn-sm" onclick="confirmTx('+JSON.stringify(tx.id)+')">✅ Konfirmasi</button>';
+        html+='<button class="btn btn-reject btn-sm" onclick="rejectTx('+JSON.stringify(tx.id)+')">❌ Tolak</button>';
       } else {
         html+='<span style="color:#94a3b8;font-size:11px">—</span>';
       }

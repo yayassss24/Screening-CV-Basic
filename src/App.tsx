@@ -416,7 +416,7 @@ export default function App() {
           setCsChatLogs(updatedLogsBeforeFetch);
           setCsChatStep("verifying");
 
-          // 1. Create Transaction in Backend (PENDING VERIFIKASI MANUAL)
+          // 1. Create Transaction in Backend (PENDING VERIFIKASI MANUAL) with screenshot
           const txRes = await fetch("/api/billing/create-transaction", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -424,6 +424,8 @@ export default function App() {
               email: csEmailAktif,
               paket: csSelectedPackage,
               source: "cs_chatbot",
+              screenshotBase64: base64Payload,
+              screenshotMimeType: file.type || "image/png",
             })
           });
           const txData = await txRes.json();

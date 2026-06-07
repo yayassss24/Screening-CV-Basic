@@ -1085,41 +1085,33 @@ Output JSON:
   "summary": "..."
 }`;
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-
-    try {
-      const geminiRes = await callGeminiWithRetry({
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: prompt },
-              {
-                inlineData: {
-                  mimeType: finalMimeType,
-                  data: screenshotBase64,
-                },
+    const geminiRes = await callGeminiWithRetry({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType: finalMimeType,
+                data: screenshotBase64,
               },
-            ],
-          },
-        ],
-        config: {
-          responseMimeType: "application/json",
-          abortSignal: controller.signal,
+            },
+          ],
         },
-      });
+      ],
+      config: {
+        responseMimeType: "application/json",
+      },
+    });
 
-      if (geminiRes && geminiRes.text) {
-        let textToParse = geminiRes.text.trim();
-        if (textToParse.startsWith("```")) {
-          textToParse = textToParse.replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
-        }
-        const result = JSON.parse(textToParse);
-        return res.json({ success: true, audit: result });
+    if (geminiRes && geminiRes.text) {
+      let textToParse = geminiRes.text.trim();
+      if (textToParse.startsWith("```")) {
+        textToParse = textToParse.replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
       }
-    } finally {
-      clearTimeout(timeout);
+      const result = JSON.parse(textToParse);
+      return res.json({ success: true, audit: result });
     }
 
     res.status(500).json({ success: false, error: "Gagal mendapatkan respons dari AI." });

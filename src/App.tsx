@@ -29,14 +29,9 @@ import {
 } from "lucide-react";
 import { onAuthStateChanged, User as FirebaseUser } from "firebase/auth";
 import { 
-  collection, 
-  query, 
-  where, 
-  onSnapshot, 
   deleteDoc, 
   doc, 
   setDoc,
-  getDoc
 } from "firebase/firestore";
 import { auth, logOut, db } from "./firebase";
 import { JagoCVAnalysisResult, UserProfile, SavedAnalysis } from "./types";
@@ -648,25 +643,7 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
     return () => unsubscribe();
   }, []);
 
-  // Monitor Profile in Firestore for live responsive changes (Only for authenticated users to avoid rules violations)
-  useEffect(() => {
-    if (!currentUser) return;
-    const activeEmail = currentUser.email;
-    if (!activeEmail) return;
 
-    // Use Firestore real-time snapshots to keep quota, tier and benefits updated instantly
-    const docRef = doc(db, "users", currentUser.uid);
-    const unsubscribe = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const docData = docSnap.data() as UserProfile;
-        setProfile(docData);
-      }
-    }, (error) => {
-      console.warn("Firestore snapshot users error:", error);
-    });
-
-    return () => unsubscribe();
-  }, [currentUser]);
 
   // Persist activeResult to localStorage for guest users
   useEffect(() => {
@@ -681,19 +658,18 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
     if (!activeEmail) return;
 
     if (currentUser) {
-      const q = query(collection(db, "saved_analyses"), where("email", "==", activeEmail));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const list: SavedAnalysis[] = [];
-        snapshot.forEach((doc) => {
-          list.push({ id: doc.id, ...doc.data() } as SavedAnalysis);
-        });
-        // Sort newest first
-        list.sort((a, b) => new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime());
-        setHistoryList(list);
-      }, (error) => {
-        console.warn("Firestore snapshot history error:", error);
-      });
-      return () => unsubscribe();
+      const loadHistory = async () => {
+        try {
+          const r = await fetch(`/api/ats/history?email=${encodeURIComponent(activeEmail)}`);
+          if (r.ok) {
+            const d = await r.json();
+            if (d.success && d.history) setHistoryList(d.history);
+          }
+        } catch (err) {
+          console.error("Gagal memuat history:", err);
+        }
+      };
+      loadHistory();
     } else {
       // Load guest analyses from localStorage first (immediate)
       setHistoryList(loadGuestAnalyses());

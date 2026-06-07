@@ -207,29 +207,43 @@ async function saveDatabase(data: DatabaseStructure) {
   // On Vercel, persist to Firestore
   if (firestoreDb) {
     try {
-      const batch = firestoreDb.batch();
-      
-      for (const tx of data.transactions) {
-        const txData = { ...tx };
-        batch.set(firestoreDb.collection("transactions").doc(tx.id), txData);
+      // GUARD: if data looks like the fresh fallback DB (only default admin, no real data),
+      // do NOT overwrite Firestore — it would wipe out all existing records.
+      const hasRealData =
+        data.transactions.length > 0 ||
+        data.activation_codes.length > 0 ||
+        data.analyses.length > 0 ||
+        Object.keys(data.users).some(
+          (email) => email !== "yahyasyarofuddin09@gmail.com"
+        );
+
+      if (!hasRealData) {
+        console.warn("[FIRESTORE] Guard activated: skipping Firestore write (fresh fallback DB detected)");
+      } else {
+        const batch = firestoreDb.batch();
+        
+        for (const tx of data.transactions) {
+          const txData = { ...tx };
+          batch.set(firestoreDb.collection("transactions").doc(tx.id), txData);
+        }
+        
+        for (const [email, profile] of Object.entries(data.users)) {
+          batch.set(firestoreDb.collection("users").doc(email), profile);
+        }
+        
+        for (const code of data.activation_codes) {
+          const docId = code.hash || crypto.createHash("sha256").update(code.kodePlainForDbFileOnly).digest("hex");
+          batch.set(firestoreDb.collection("activation_codes").doc(docId), code);
+        }
+        
+        for (const analysis of data.analyses) {
+          batch.set(firestoreDb.collection("analyses").doc(analysis.id), analysis);
+        }
+        
+        await batch.commit();
+        console.log(`[FIRESTORE] Persisted ${data.transactions.length} tx, ${Object.keys(data.users).length} users`);
+        return;
       }
-      
-      for (const [email, profile] of Object.entries(data.users)) {
-        batch.set(firestoreDb.collection("users").doc(email), profile);
-      }
-      
-      for (const code of data.activation_codes) {
-        const docId = code.hash || crypto.createHash("sha256").update(code.kodePlainForDbFileOnly).digest("hex");
-        batch.set(firestoreDb.collection("activation_codes").doc(docId), code);
-      }
-      
-      for (const analysis of data.analyses) {
-        batch.set(firestoreDb.collection("analyses").doc(analysis.id), analysis);
-      }
-      
-      await batch.commit();
-      console.log(`[FIRESTORE] Persisted ${data.transactions.length} tx, ${Object.keys(data.users).length} users`);
-      return;
     } catch (e: any) {
       console.error("[FIRESTORE] Write failed, falling back to file:", e.message);
     }

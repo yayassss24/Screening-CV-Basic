@@ -8,6 +8,34 @@ import mammoth from "mammoth";
 import nodemailer from "nodemailer";
 import OpenAI from "openai";
 
+// Firebase Admin SDK (server-side, for persistent Firestore storage on Vercel)
+let firestoreDb: any = null;
+let adminAppInitialized = false;
+
+async function initFirestoreAdmin() {
+  if (adminAppInitialized) return;
+  const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (!sa) return;
+  try {
+    const fbAdmin = await import("firebase-admin");
+    if (!fbAdmin.apps.length) {
+      const serviceAccount = JSON.parse(sa);
+      fbAdmin.initializeApp({
+        credential: fbAdmin.credential.cert(serviceAccount),
+      });
+    }
+    firestoreDb = fbAdmin.firestore();
+    adminAppInitialized = true;
+    console.log("[FIRESTORE] Firebase Admin initialized");
+  } catch (e: any) {
+    console.warn("[FIRESTORE] Init failed, using file fallback:", e.message);
+  }
+}
+
+if (process.env.VERCEL) {
+  initFirestoreAdmin();
+}
+
 dotenv.config();
 
 // Nodemailer SMTP transporter
@@ -109,6 +137,36 @@ interface DatabaseStructure {
 
 // Ensure the local sandbox database is initialized
 async function initDatabase(): Promise<DatabaseStructure> {
+  // On Vercel, try Firestore first for persistent storage
+  if (firestoreDb) {
+    try {
+      const [txSnap, usersSnap, codesSnap, analysesSnap] = await Promise.all([
+        firestoreDb.collection("transactions").get(),
+        firestoreDb.collection("users").get(),
+        firestoreDb.collection("activation_codes").get(),
+        firestoreDb.collection("analyses").get(),
+      ]);
+      
+      const transactions: JagoTransaction[] = [];
+      txSnap.forEach((doc: any) => transactions.push({ id: doc.id, ...doc.data() } as JagoTransaction));
+      
+      const users: Record<string, UserProfile> = {};
+      usersSnap.forEach((doc: any) => { users[doc.id] = doc.data() as UserProfile; });
+      
+      const activation_codes: ActivationCode[] = [];
+      codesSnap.forEach((doc: any) => activation_codes.push(doc.data() as ActivationCode));
+      
+      const analyses: SavedAnalysis[] = [];
+      analysesSnap.forEach((doc: any) => analyses.push(doc.data() as SavedAnalysis));
+      
+      console.log(`[FIRESTORE] Loaded ${transactions.length} tx, ${Object.keys(users).length} users, ${activation_codes.length} codes, ${analyses.length} analyses`);
+      return { users, activation_codes, analyses, transactions };
+    } catch (e: any) {
+      console.error("[FIRESTORE] Read failed, falling back to file:", e.message);
+    }
+  }
+  
+  // File-based fallback (local dev or Firestore unavailable)
   try {
     await fs.access(DB_PATH);
     const raw = await fs.readFile(DB_PATH, "utf-8");
@@ -141,6 +199,38 @@ async function initDatabase(): Promise<DatabaseStructure> {
 }
 
 async function saveDatabase(data: DatabaseStructure) {
+  // On Vercel, persist to Firestore
+  if (firestoreDb) {
+    try {
+      const batch = firestoreDb.batch();
+      
+      for (const tx of data.transactions) {
+        const txData = { ...tx };
+        batch.set(firestoreDb.collection("transactions").doc(tx.id), txData);
+      }
+      
+      for (const [email, profile] of Object.entries(data.users)) {
+        batch.set(firestoreDb.collection("users").doc(email), profile);
+      }
+      
+      for (const code of data.activation_codes) {
+        const docId = code.hash || crypto.createHash("sha256").update(code.kodePlainForDbFileOnly).digest("hex");
+        batch.set(firestoreDb.collection("activation_codes").doc(docId), code);
+      }
+      
+      for (const analysis of data.analyses) {
+        batch.set(firestoreDb.collection("analyses").doc(analysis.id), analysis);
+      }
+      
+      await batch.commit();
+      console.log(`[FIRESTORE] Persisted ${data.transactions.length} tx, ${Object.keys(data.users).length} users`);
+      return;
+    } catch (e: any) {
+      console.error("[FIRESTORE] Write failed, falling back to file:", e.message);
+    }
+  }
+  
+  // File-based fallback
   await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
 }
 
@@ -2035,9 +2125,9 @@ JD: ${jobDescription.slice(0, 1500)}
   }
 });
 
-// Admin dashboard (protected by ADMIN_PASSWORD env var)
+// Admin dashboard (protected by ADMIN_ACTIVATION_CODE env var)
 app.get("/admin", (req, res) => {
-  const adminPass = process.env.ADMIN_PASSWORD || "admin123";
+  const adminCode = process.env.ADMIN_ACTIVATION_CODE || "JAGO-ADMIN-2024";
   res.send(`<!DOCTYPE html>
 <html lang="id">
 <head>
@@ -2086,21 +2176,21 @@ code{background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:11px}
 <div id="app">
 <div id="login">
 <h1 style="font-size:28px;margin-bottom:4px">🔐 Admin JagoCV</h1>
-<p class="sub" style="margin-bottom:8px">Masukkan password admin</p>
-<input type="password" id="pwdInput" placeholder="Password" onkeydown="if(event.key==='Enter')login()"/>
+<p class="sub" style="margin-bottom:8px">Masukkan kode aktivasi admin</p>
+<input type="text" id="codeInput" placeholder="Kode Aktivasi" autocomplete="off" onkeydown="if(event.key==='Enter')login()"/>
 <button onclick="login()">Masuk</button>
 <p class="error" id="loginError"></p>
 </div>
 </div>
 <script>
-const ADMIN_PASS = ${JSON.stringify(adminPass)};
+const ADMIN_CODE = ${JSON.stringify(adminCode)};
 function login(){
-  const val=document.getElementById('pwdInput').value;
-  if(val===ADMIN_PASS){
+  const val=document.getElementById('codeInput').value.trim();
+  if(val===ADMIN_CODE){
     document.getElementById('login').style.display='none';
     loadTransactions();
   } else {
-    document.getElementById('loginError').textContent='Password salah!';
+    document.getElementById('loginError').textContent='Kode aktivasi salah!';
   }
 }
 let allTx=[];

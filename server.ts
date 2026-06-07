@@ -2260,14 +2260,14 @@ function render(){
       const nominal='Rp '+(tx.nominal||0).toLocaleString('id-ID');
       const date=new Date(tx.createdAt).toLocaleDateString('id-ID',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
       const canAct=tx.status==='PENDING'||tx.status==='PENDING VERIFIKASI MANUAL';
-      const hasScreenshot = !!tx.screenshotBase64;
+      const hasScreenshot = !!tx.hasScreenshot;
       html+='<tr><td><code>'+tx.id.slice(0,16)+'</code></td><td>'+tx.email+'</td><td><strong>'+tx.paket+'</strong></td><td>'+nominal+'</td><td><span class="status '+statusClass+'">'+tx.status+'</span></td><td>'+date+'</td><td class="actions">';
       if(hasScreenshot){
         html+='<a href="/api/billing/admin/screenshot/'+encodeURIComponent(tx.id)+'" target="_blank" class="btn btn-sm" style="background:#6366f1;color:#fff;text-decoration:none">📷 Lihat</a>';
       }
       if(canAct){
-        html+='<button class="btn btn-confirm btn-sm" onclick="confirmTx('+JSON.stringify(tx.id)+')">✅ Konfirmasi</button>';
-        html+='<button class="btn btn-reject btn-sm" onclick="rejectTx('+JSON.stringify(tx.id)+')">❌ Tolak</button>';
+        html+='<button class="btn btn-confirm btn-sm" onclick=\'confirmTx('+JSON.stringify(tx.id)+')\'>✅ Konfirmasi</button>';
+        html+='<button class="btn btn-reject btn-sm" onclick=\'rejectTx('+JSON.stringify(tx.id)+')\'>❌ Tolak</button>';
       } else {
         html+='<span style="color:#94a3b8;font-size:11px">—</span>';
       }

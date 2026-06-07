@@ -1148,7 +1148,8 @@ Output JSON:
 
     res.status(500).json({ success: false, error: "Gagal mendapatkan respons dari AI." });
   } catch (error: any) {
-    const errMsg = error?.message || String(error || "");
+    const rawMsg = error?.message || (error?.error?.message) || String(error || "");
+    const errMsg = typeof rawMsg === "string" ? rawMsg : JSON.stringify(rawMsg);
     const isQuotaError = errMsg.toLowerCase().includes("quota") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("429");
     if (isQuotaError) {
       console.warn("[AUDIT PAYMENT] Quota AI habis, audit dilewati.");

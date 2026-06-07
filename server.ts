@@ -326,6 +326,56 @@ async function callAIWithFallback(promptText: string, systemInstruction: string,
   throw new Error("Semua provider AI (Gemini, Groq, OpenRouter) gagal.");
 }
 
+// Multimodal fallback for payment audit (Gemini → OpenRouter vision)
+async function callAuditWithFallback(prompt: string, base64: string, mimeType: string): Promise<{ text: string }> {
+  // 1. Try Gemini first
+  try {
+    const resp = await callGeminiWithRetry({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType, data: base64 } },
+          ],
+        },
+      ],
+      config: { responseMimeType: "application/json" },
+    });
+    if (resp?.text) return resp;
+  } catch (e: any) {
+    console.warn("[AUDIT FALLBACK] Gemini gagal:", e?.message?.slice(0, 100));
+  }
+
+  // 2. Try OpenRouter with a vision model
+  const or = getORClient();
+  if (or) {
+    try {
+      console.log("[AUDIT FALLBACK] Mencoba OpenRouter vision...");
+      const dataUrl = `data:${mimeType};base64,${base64}`;
+      const resp = await or.chat.completions.create({
+        model: "google/gemini-2.0-flash-001",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: prompt },
+              { type: "image_url", image_url: { url: dataUrl } },
+            ],
+          },
+        ],
+        response_format: { type: "json_object" },
+      });
+      const text = resp.choices?.[0]?.message?.content || "";
+      if (text) return { text };
+    } catch (e: any) {
+      console.warn("[AUDIT FALLBACK] OpenRouter gagal:", e?.message?.slice(0, 100));
+    }
+  }
+
+  throw new Error("Semua provider AI untuk audit (Gemini, OpenRouter) gagal.");
+}
+
 // API endpoint to retrieve or create current user profile
 app.get("/api/profile", async (req, res) => {
   try {
@@ -1085,25 +1135,7 @@ Output JSON:
   "summary": "..."
 }`;
 
-    const geminiRes = await callGeminiWithRetry({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                mimeType: finalMimeType,
-                data: screenshotBase64,
-              },
-            },
-          ],
-        },
-      ],
-      config: {
-        responseMimeType: "application/json",
-      },
-    });
+    const geminiRes = await callAuditWithFallback(prompt, screenshotBase64, finalMimeType);
 
     if (geminiRes && geminiRes.text) {
       let textToParse = geminiRes.text.trim();

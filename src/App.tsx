@@ -345,6 +345,40 @@ export default function App() {
     }
   }, [currentUser, profile.email]);
 
+  useEffect(() => {
+    if (csChatStep !== "pending_admin") return;
+    const interval = setInterval(async () => {
+      const email = currentUser?.email || profile.email;
+      if (!email) return;
+      try {
+        const res = await fetch(`/api/billing/transactions?email=${encodeURIComponent(email)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.success || !data.transactions?.length) return;
+        const latestTx = data.transactions[0];
+        if (latestTx.status === "PAID") {
+          setLastActivationCode(latestTx.codePlainForDb || "");
+          setCsChatStep("success");
+          setCsChatLogs(prev => [...prev, {
+            sender: "bot" as const,
+            text: `🎉 Pembayaran Anda telah **DIVERIFIKASI** oleh admin! Paket **${csSelectedPackage}** Anda siap digunakan.`,
+            timestamp: new Date()
+          }]);
+        } else if (latestTx.status === "FAILED") {
+          setCsChatStep("failed");
+          setCsChatLogs(prev => [...prev, {
+            sender: "bot" as const,
+            text: `❌ Pembayaran Anda **DITOLAK** oleh admin. Silakan hubungi admin untuk informasi lebih lanjut atau lakukan pembayaran ulang.`,
+            timestamp: new Date()
+          }]);
+        }
+      } catch (err) {
+        console.error("Gagal polling status transaksi:", err);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [csChatStep, currentUser, profile.email, csSelectedPackage]);
+
   const handleCsSelectPackage = (paket: "BASIC" | "PRO") => {
     setCsSelectedPackage(paket);
     const nominal = paket === "PRO" ? 65000 : 25000;

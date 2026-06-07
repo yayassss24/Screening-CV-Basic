@@ -2219,9 +2219,14 @@ code{background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:11px}
 </div>
 <script>
 const ADMIN_CODE = ${JSON.stringify(adminCode)};
+if(sessionStorage.getItem('adminLoggedIn')==='true'){
+  document.getElementById('loginPage').style.display='none';
+  loadTransactions();
+}
 function adminLogin(){
   const val=document.getElementById('codeInput').value.trim();
   if(val===ADMIN_CODE){
+    sessionStorage.setItem('adminLoggedIn','true');
     document.getElementById('loginPage').style.display='none';
     loadTransactions();
   } else {
@@ -2244,7 +2249,7 @@ async function loadTransactions(){
 function render(){
   const filtered=filter==='all'?allTx:allTx.filter(t=>t.status===filter);
   const counts={all:allTx.length,pending:allTx.filter(t=>t.status==='PENDING'||t.status==='PENDING VERIFIKASI MANUAL').length,paid:allTx.filter(t=>t.status==='PAID').length,failed:allTx.filter(t=>t.status==='FAILED').length};
-  let html='<div class="header"><div><h1>📋 Dashboard Pembayaran</h1><p class="sub">'+allTx.length+' transaksi total</p></div><button class="btn btn-sm" style="background:#e2e8f0" onclick="location.reload()">🔄 Refresh</button></div>';
+  let html='<div class="header"><div><h1>📋 Dashboard Pembayaran</h1><p class="sub">'+allTx.length+' transaksi total</p></div><button class="btn btn-sm" style="background:#e2e8f0" onclick="loadTransactions()">🔄 Refresh</button></div>';
   html+='<div class="filters">';
   const labels={all:'Semua ('+counts.all+')',pending:'Pending ('+counts.pending+')',paid:'Lunas ('+counts.paid+')',failed:'Ditolak ('+counts.failed+')'};
   Object.entries(labels).forEach(([k,v])=>{

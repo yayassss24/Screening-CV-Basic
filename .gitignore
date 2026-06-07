@@ -8,4 +8,5 @@ coverage/
 !.env.example
 db.json
 *.traineddata
-public/
+public/*
+!public/*.png

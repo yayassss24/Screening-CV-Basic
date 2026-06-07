@@ -562,12 +562,14 @@ export default function App() {
         }
       } else {
         setCurrentUser(null);
+        const guestEmail = getGuestEmail();
         setProfile(prev => ({
-          email: getGuestEmail(),
+          email: guestEmail,
           paket: "TRIAL",
           screeningSisa: 3,
           screeningTotalCount: prev.screeningTotalCount,
         }));
+        await fetchProfile(guestEmail);
       }
     });
     return () => unsubscribe();
@@ -1724,7 +1726,7 @@ export default function App() {
       <header className="bg-white text-slate-800 py-3 px-3 md:px-8 border-b border-slate-200 sticky top-0 z-50 shadow-xs">
         <div className="max-w-7xl mx-auto flex flex-row items-center justify-between gap-2 md:gap-4">
           <div className="flex items-center gap-2 md:gap-3 min-w-0">
-            <img src="/logo.jpeg" alt="JagoCV" className="w-8 h-8 md:w-12 md:h-12 rounded-lg md:rounded-xl object-cover shrink-0" />
+            <img src="/logo.png" alt="JagoCV" className="w-8 h-8 md:w-12 md:h-12 rounded-lg md:rounded-xl object-cover shrink-0" />
             <div className="min-w-0">
               <h1 className="text-sm md:text-xl font-bold tracking-tight flex items-center gap-1 md:gap-1.5 font-sans text-slate-800">
                 JagoCV AI <span className="text-[8px] md:text-[10px] bg-blue-50 border border-blue-200 text-blue-700 font-bold px-1.5 md:px-2 py-0.5 rounded-full uppercase tracking-wider">v2.1</span>

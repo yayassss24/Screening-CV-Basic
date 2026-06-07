@@ -348,7 +348,7 @@ export default function App() {
   useEffect(() => {
     if (csChatStep !== "pending_admin") return;
     const interval = setInterval(async () => {
-      const email = currentUser?.email || profile.email;
+      const email = csEmailAktif;
       if (!email) return;
       try {
         const res = await fetch(`/api/billing/transactions?email=${encodeURIComponent(email)}`);
@@ -377,7 +377,7 @@ export default function App() {
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [csChatStep, currentUser, profile.email, csSelectedPackage]);
+  }, [csChatStep, csEmailAktif, csSelectedPackage]);
 
   const handleCsSelectPackage = (paket: "BASIC" | "PRO") => {
     setCsSelectedPackage(paket);

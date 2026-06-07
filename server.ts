@@ -2347,6 +2347,30 @@ function showToast(msg,type){
 </html>`);
 });
 
+// Debug endpoint to check Firestore connection status
+app.get("/api/debug/firestore", async (req, res) => {
+  const status: any = {
+    firestoreDb: firestoreDb !== null,
+    adminAppInitialized,
+    hasServiceAccount: !!process.env.FIREBASE_SERVICE_ACCOUNT,
+    serviceAccountLength: process.env.FIREBASE_SERVICE_ACCOUNT?.length || 0,
+    vercel: !!process.env.VERCEL,
+    nodeEnv: process.env.NODE_ENV,
+  };
+  if (firestoreDb) {
+    try {
+      const usersSnap = await firestoreDb.collection("users").get();
+      status.usersCount = usersSnap.size;
+      const emails: string[] = [];
+      usersSnap.forEach((doc: any) => emails.push(doc.id));
+      status.users = emails;
+    } catch (e: any) {
+      status.firestoreReadError = e.message;
+    }
+  }
+  res.json(status);
+});
+
 // Serve static assets in production, setup Vite middleware in development
 async function startServer() {
   if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
@@ -2374,7 +2398,9 @@ async function startServer() {
 
 // Warm up db.json on Vercel cold start
 if (process.env.VERCEL) {
-  initDatabase().catch(() => {});
+  initDatabase().catch((e) => {
+    console.error("[COLD START] initDatabase failed:", e.message);
+  });
 }
 
 startServer();

@@ -2222,9 +2222,15 @@ code{background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:11px}
 </div>
 <script>
 const ADMIN_CODE = ${JSON.stringify(adminCode)};
+let pollTimer;
+function startPolling(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer=setInterval(loadTransactions,5000);
+}
 if(sessionStorage.getItem('adminLoggedIn')==='true'){
   document.getElementById('loginPage').style.display='none';
   loadTransactions();
+  startPolling();
 }
 function adminLogin(){
   const val=document.getElementById('codeInput').value.trim();
@@ -2232,6 +2238,7 @@ function adminLogin(){
     sessionStorage.setItem('adminLoggedIn','true');
     document.getElementById('loginPage').style.display='none';
     loadTransactions();
+    startPolling();
   } else {
     document.getElementById('loginError').textContent='Kode aktivasi salah!';
   }

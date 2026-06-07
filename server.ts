@@ -87,6 +87,9 @@ async function sendInvoiceEmail(to: string, subject: string, html: string, pdfBu
 async function sendWaNotification(phone: string, message: string) {
   const token = process.env.WA_API_KEY;
   if (!token) { console.warn("[WA] WA_API_KEY tidak di-set, lewati notifikasi WhatsApp"); return; }
+  // strip leading 62 if present — Fonnte countryCode will add it
+  const target = phone.replace(/^62/, "");
+  console.log(`[WA] Mengirim ke target: ${target}, panjang token: ${token.length}`);
   try {
     const res = await fetch("https://api.fonnte.com/send", {
       method: "POST",
@@ -94,9 +97,11 @@ async function sendWaNotification(phone: string, message: string) {
         Authorization: token,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ target: phone, message, countryCode: "62" }),
+      body: JSON.stringify({ target, message, countryCode: "62" }),
     });
-    const result = await res.json();
+    const text = await res.text();
+    let result: any;
+    try { result = JSON.parse(text); } catch { result = { raw: text }; }
     if (result.status === true) {
       console.log(`[WA TERKIRIM] ke ${phone}`);
     } else {

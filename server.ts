@@ -83,6 +83,32 @@ async function sendInvoiceEmail(to: string, subject: string, html: string, pdfBu
   }
 }
 
+// Send WhatsApp notification via Wablas API
+async function sendWaNotification(phone: string, message: string) {
+  const token = process.env.WA_API_KEY;
+  if (!token) { console.warn("[WA] WA_API_KEY tidak di-set, lewati notifikasi WhatsApp"); return; }
+  const instance = process.env.WA_INSTANCE || "solo";
+  const url = `https://${instance}.wablas.com/api/send-message`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: token,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ phone, message, secret: false }),
+    });
+    const result = await res.json();
+    if (result.status === true || result.status === "true") {
+      console.log(`[WA TERKIRIM] ke ${phone}`);
+    } else {
+      console.warn("[WA GAGAL]", result);
+    }
+  } catch (e: any) {
+    console.error("[WA ERROR]", e.message);
+  }
+}
+
 const app = express();
 const PORT = 3000;
 
@@ -814,6 +840,19 @@ app.post("/api/billing/admin/confirm", async (req, res) => {
 
     await saveDatabase(dbData);
 
+    // Notify admin via WhatsApp
+    const adminPhone = process.env.ADMIN_WA || "6281234567890";
+    const nominalVal = (tx as any).nominal || 0;
+    sendWaNotification(adminPhone,
+      `✅ *Pembayaran Dikonfirmasi JagoCV*\n\n` +
+      `📧 Email: ${tx.email}\n` +
+      `📦 Paket: *${tx.paket}*\n` +
+      `💰 Nominal: Rp ${nominalVal.toLocaleString("id-ID")}\n` +
+      `🆔 ID: ${tx.id}\n` +
+      `🎫 Kode Aktivasi: ${activationCode}\n\n` +
+      `Terima kasih telah memverifikasi pembayaran ini.`
+    );
+
     // --- GENERATE INVOICE PDF ---
     const adminEmail = process.env.ADMIN_EMAIL || "yahyasyarofuddin09@gmail.com";
     const nominal = (tx as any).nominal || 0;
@@ -1067,6 +1106,21 @@ app.post("/api/billing/create-transaction", async (req, res) => {
 
     dbData.transactions.push(newTx);
     await saveDatabase(dbData);
+
+    // Notify admin via WhatsApp for CS chatbot purchases
+    if (source === "cs_chatbot") {
+      const adminPhone = process.env.ADMIN_WA || "6281234567890";
+      const nominalStr = nominal.toLocaleString("id-ID");
+      sendWaNotification(adminPhone,
+        `🔔 *Pembayaran Baru JagoCV*\n\n` +
+        `📧 Email: ${email.trim().toLowerCase()}\n` +
+        `📦 Paket: *${paket}*\n` +
+        `💰 Nominal: Rp ${nominalStr}\n` +
+        `🆔 ID: ${transactionId}\n` +
+        `📌 Status: ${status}\n\n` +
+        `Cek dashboard admin untuk konfirmasi.`
+      );
+    }
 
     res.json({
       success: true,

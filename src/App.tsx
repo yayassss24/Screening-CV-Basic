@@ -433,32 +433,6 @@ export default function App() {
 
           const transactionId = txData.transactionId;
 
-          // 1a. AI Fraud Audit (non-blocking, purely informational)
-          try {
-            const auditRes = await fetch("/api/billing/audit-payment", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                screenshotBase64: base64Payload,
-                screenshotMimeType: file.type || "image/png",
-                expectedNominal: csSelectedPackage === "PRO" ? 65000 : 25000,
-              })
-            });
-            if (auditRes.ok) {
-              const auditData = await auditRes.json();
-              if (auditData.success && auditData.audit) {
-                const a = auditData.audit;
-                setCsChatLogs(prev => [...prev, {
-                  sender: "bot" as const,
-                  text: `🔍 Laporan Audit Forensik Pembayaran:\n\n• AI Generation: ${a.ai_generation?.score || 'N/A'}% — ${a.ai_generation?.conclusion || '-'}\n• Edit Nominal: ${a.nominal_tampering?.score || 'N/A'}% — ${a.nominal_tampering?.conclusion || '-'}\n• Status Pembayaran: ${a.payment_validation?.is_successful ? '✅ Valid' : '❌ Tidak Valid'}\n• Merchant Cocok: ${a.payment_validation?.merchant_match ? '✅ Ya' : '❌ Tidak'}\n• Nominal Cocok: ${a.payment_validation?.nominal_match ? '✅ Ya' : '❌ Tidak'}\n\nKesimpulan: ${a.summary || a.overall_verdict || '-'}`,
-                  timestamp: new Date()
-                }]);
-              }
-            }
-          } catch (auditErr: any) {
-            // Audit unavailable — continue, no blocking
-          }
-
           // 2. Inform user — pending admin verification
           setCsChatStep("pending_admin");
           setCsChatLogs(prev => [

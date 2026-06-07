@@ -329,7 +329,7 @@ export default function App() {
   const [csChatLogs, setCsChatLogs] = useState<Array<{ sender: "user" | "bot"; text: string; image?: string; timestamp: Date }>>([
     {
       sender: "bot" as const,
-      text: "Halo! Saya adalah AI Customer Service dan Payment Assistant untuk layanan JagoCV AI Screening CV.\n\nSilakan pilih paket yang ingin Anda gunakan:\n\n1. Basic (Rp25.000)\n2. Pro (Rp65.000)",
+      text: "Halo! Saya adalah AI Customer Service dan Payment Assistant untuk layanan JagoCV AI Screening CV.\n\nSilakan pilih paket yang ingin Anda gunakan:\n\n1. Basic (Rp75.000)\n2. Pro (Rp100.000)",
       timestamp: new Date()
     }
   ]);
@@ -376,7 +376,7 @@ export default function App() {
 
   const handleCsSelectPackage = (paket: "BASIC" | "PRO") => {
     setCsSelectedPackage(paket);
-    const nominal = paket === "PRO" ? 65000 : 25000;
+    const nominal = paket === "PRO" ? 100000 : 75000;
     const updatedLogs = [
       ...csChatLogs,
       {
@@ -516,7 +516,7 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
     setCsChatLogs([
       {
         sender: "bot" as const,
-        text: "Halo! Saya adalah AI Customer Service dan Payment Assistant untuk JagoCV AI Screening CV.\n\nSilakan pilih paket yang ingin Anda gunakan:\n\n1. Basic (Rp25.000)\n2. Pro (Rp65.000)",
+        text: "Halo! Saya adalah AI Customer Service dan Payment Assistant untuk JagoCV AI Screening CV.\n\nSilakan pilih paket yang ingin Anda gunakan:\n\n1. Basic (Rp75.000)\n2. Pro (Rp100.000)",
         timestamp: new Date()
       }
     ]);
@@ -2802,7 +2802,7 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
                 Paket {showPackageModal}
               </div>
               <h3 className="text-lg font-extrabold text-slate-900">
-                {showPackageModal === "PRO" ? "Rp65.000" : "Rp25.000"}
+                {showPackageModal === "PRO" ? "Rp100.000" : "Rp75.000"}
               </h3>
               <p className="text-xs text-slate-500 mt-1">Aktifkan fitur lengkap JagoCV</p>
             </div>
@@ -2813,8 +2813,8 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
                   <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
                     <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
                     <div>
-                      <p className="font-bold text-sm text-slate-800">20x Screening CV</p>
-                      <p className="text-[11px] text-slate-500">Analisis mendalam untuk 20 kandidat</p>
+                      <p className="font-bold text-sm text-slate-800">Unlimited Screening CV</p>
+                      <p className="text-[11px] text-slate-500">Analisis tanpa batas untuk semua kandidat</p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
@@ -2976,7 +2976,7 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
                           <p className="text-[7.5px] font-black tracking-tighter text-slate-800 mb-1">QRIS OFFICIAL MERCHANT</p>
                           {csSelectedPackage && (
                             <div className="my-1.5 bg-rose-50 text-rose-700 px-2.5 py-1 rounded-md text-[9.5px] font-black font-mono tracking-wide border border-rose-200 text-center inline-block">
-                              Rp {(csSelectedPackage === "PRO" ? 65000 : 25000).toLocaleString("id-ID")}
+                              Rp {(csSelectedPackage === "PRO" ? 100000 : 75000).toLocaleString("id-ID")}
                             </div>
                           )}
                           <img
@@ -3012,14 +3012,14 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
                     className="w-full text-left bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 px-3 rounded-lg border border-slate-700 hover:border-slate-500 cursor-pointer transition-all hover:translate-x-1 duration-150 text-[10.5px] flex justify-between"
                   >
                     <span>1. Paket Basic</span>
-                    <span className="text-slate-400">Rp25.000</span>
+                    <span className="text-slate-400">Rp75.000</span>
                   </button>
                   <button
                     onClick={() => handleCsSelectPackage("PRO")}
                     className="w-full text-left bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 px-3 rounded-lg border border-slate-700 hover:border-slate-500 cursor-pointer transition-all hover:translate-x-1 duration-150 text-[10.5px] flex justify-between"
                   >
                     <span>2. Paket Pro</span>
-                    <span className="text-emerald-400">Rp65.000</span>
+                    <span className="text-emerald-400">Rp100.000</span>
                   </button>
                 </div>
               )}

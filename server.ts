@@ -521,7 +521,7 @@ app.post("/api/profile/select-paket", async (req, res) => {
       ...dbData.users[cleanEmail],
       email: cleanEmail,
       paket,
-      screeningSisa: paket === "PRO" ? "Unlimited" : 20,
+      screeningSisa: "Unlimited",
       screeningTotalCount: dbData.users[cleanEmail]?.screeningTotalCount || 0,
     };
     await saveDatabase(dbData);
@@ -913,8 +913,8 @@ const screenshotHashPool = new Set<string>();
 
 const PAKET_PRICES: Record<string, number> = {
   TRIAL: 10000,
-  BASIC: 25000,
-  PRO: 65000,
+  BASIC: 75000,
+  PRO: 100000,
 };
 
 async function verifyPaymentScreenshot(
@@ -1006,7 +1006,7 @@ app.post("/api/billing/create-transaction", async (req, res) => {
     }
 
     const transactionId = `TX-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const nominal = paket === "PRO" ? 65000 : paket === "TRIAL" ? 10000 : 25000;
+    const nominal = paket === "PRO" ? 100000 : paket === "TRIAL" ? 10000 : 75000;
     const status = source === "cs_chatbot" ? "PENDING VERIFIKASI MANUAL" : "PENDING";
 
     const newTx: JagoTransaction = {
@@ -1441,8 +1441,8 @@ Alur Kerja Sistem (Workflow):
 2. **Validasi Status**: Berhasil jika ada indikasi transaksi "BERHASIL", "SUKSES", "SUCCESS", atau "SETTLED".
 3. **Validasi Merchant**: Pastikan nama merchant tujuan mengarah ke "JagoCV" atau "JAGOCV, KONSTRUKSI & LAYANAN UMUM". Any variations like "JagoCV" or "JAGOCV, KONSTRUKSI & LAYANAN UMUM" are valid.
 4. **Klasifikasi Paket**:
-   - Nominal sekitar Rp 25.000 -> Paket BASIC
-   - Nominal sekitar Rp 65.000 -> Paket PRO
+   - Nominal sekitar Rp 75.000 -> Paket BASIC
+   - Nominal sekitar Rp 100.000 -> Paket PRO
 5. **Penanganan Kasus Gagal**: Jika gambar hanya berupa barcode QRIS kosong (belum dibayar), poster promosi, foto selfie, atau struk editan/palsu, tolak transaksi dengan penjelasan sopan dalam Bahasa Indonesia.
 6. **FORENSIK DAN ANTI-FRAUD** — Lakukan audit forensik pada gambar:
    a. **AI GENERATION CHECK**: Apakah gambar ini buatan AI? Cari pixel-perfect edges, inconsistent lighting, unnatural text rendering, missing natural noise, artifacts.

@@ -139,6 +139,9 @@ interface DatabaseStructure {
 
 // Ensure the local sandbox database is initialized
 async function initDatabase(): Promise<DatabaseStructure> {
+  // Ensure Firestore Admin is initialized (was kicked off at module load)
+  await initFirestoreAdmin();
+
   // On Vercel, try Firestore first for persistent storage
   if (firestoreDb) {
     try {

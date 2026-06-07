@@ -1283,7 +1283,7 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
       });
       y += 1.5;
 
-      if (activeResult.meta.paket === "PRO" || activeResult.meta.paket === "BASIC") {
+      if (profile.paket === "PRO" || profile.paket === "BASIC") {
         if (cvInfo.keahlian_dasar && cvInfo.keahlian_dasar.length > 0) {
           checkPageBreak(15);
           doc.setFont("helvetica", "bold");
@@ -2213,7 +2213,7 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
 
                 <div className="md:col-span-8">
                   <div className="flex items-center gap-2 mb-1.5">
-                    <span className="text-[10px] font-bold text-slate-450 text-slate-400 uppercase tracking-wider">Hasil Uji Hirability ({activeResult.meta.paket})</span>
+                    <span className="text-[10px] font-bold text-slate-450 text-slate-400 uppercase tracking-wider">Hasil Uji Hirability ({profile.paket})</span>
                     <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold leading-none ${
                       activeResult.hireability_score.nilai && activeResult.hireability_score.nilai >= 80 
                         ? "bg-emerald-50 text-emerald-800 border-emerald-200 border"
@@ -2286,7 +2286,7 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
                   </div>
 
                   <div className="border-t border-slate-100 pt-3 flex flex-col gap-3">
-                    {activeResult.meta.paket === "PRO" || activeResult.meta.paket === "BASIC" ? (
+                    {profile.paket === "PRO" || profile.paket === "BASIC" ? (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                           <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Skills & Kompetensi Teknis:</span>
@@ -2518,7 +2518,7 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
               )}
 
               {/* AI Resume rewrite mapping card - PRO TIER BLOCK */}
-              {activeResult.meta.paket === "PRO" ? (
+              {profile.paket === "PRO" ? (
                 activeResult.ai_resume_rewrite && (
                   <div className="bg-slate-900 text-white rounded-2xl p-6 shadow-md border border-slate-950">
                     <div className="flex justify-between items-start mb-3">
@@ -2572,7 +2572,7 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
               )}
 
               {/* Recruiter Perspective & Story - PRO BLOCK */}
-              {activeResult.meta.paket === "PRO" && activeResult.recruiter_perspective && (
+              {profile.paket === "PRO" && activeResult.recruiter_perspective && (
                 <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs flex flex-col gap-3">
                   <h3 className="text-xs font-bold text-blue-800 uppercase tracking-widest flex items-center gap-1.5 border-b border-slate-100 pb-2">
                     <Users className="w-4 h-4 text-blue-600" /> Memo Perspektif Recruiter (Narasi HRD)
@@ -2584,7 +2584,7 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
               )}
 
               {/* Interview readiness questions - PRO BLOCK */}
-              {activeResult.meta.paket === "PRO" && activeResult.interview_readiness && (
+              {profile.paket === "PRO" && activeResult.interview_readiness && (
                 <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs flex flex-col gap-4">
                   <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
                     <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-1.5">
@@ -2623,7 +2623,7 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
               )}
 
               {/* Skill Development Plan - PRO TIER */}
-              {activeResult.meta.paket === "PRO" ? (
+              {profile.paket === "PRO" ? (
                 activeResult.skill_development_plan ? (
                   <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs flex flex-col gap-4 animate-fadeIn">
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 pb-2.5 gap-2">
@@ -2716,7 +2716,7 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
               )}
 
               {/* Premium Cover Letter - PRO TIER */}
-              {activeResult.meta.paket === "PRO" ? (
+              {profile.paket === "PRO" ? (
                 activeResult.cover_letter_premium ? (
                   <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs flex flex-col gap-4 animate-fadeIn">
                     <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">

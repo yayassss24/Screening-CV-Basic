@@ -215,15 +215,30 @@ function getGuestEmail(): string {
   return id;
 }
 
-export default function App() {
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [profile, setProfile] = useState<UserProfile>({
+function loadGuestProfile(): UserProfile {
+  try {
+    const saved = localStorage.getItem("jagocv_guest_profile");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed && parsed.email) return parsed as UserProfile;
+    }
+  } catch {}
+  return {
     email: getGuestEmail(),
     paket: "TRIAL",
     screeningSisa: 3,
     screeningTotalCount: 0,
-  });
+  };
+}
+
+function saveGuestProfile(p: UserProfile) {
+  localStorage.setItem("jagocv_guest_profile", JSON.stringify(p));
+}
+
+export default function App() {
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [profile, setProfile] = useState<UserProfile>(loadGuestProfile());
 
   // Editor Inputs
   const [cvText, setCvText] = useState("");
@@ -563,12 +578,8 @@ export default function App() {
       } else {
         setCurrentUser(null);
         const guestEmail = getGuestEmail();
-        setProfile(prev => ({
-          email: guestEmail,
-          paket: "TRIAL",
-          screeningSisa: 3,
-          screeningTotalCount: prev.screeningTotalCount,
-        }));
+        const saved = loadGuestProfile();
+        setProfile(saved);
         await fetchProfile(guestEmail);
       }
     });
@@ -638,7 +649,19 @@ export default function App() {
       const response = await fetch(`/api/profile?email=${encodeURIComponent(email)}`);
       const data = await response.json();
       if (data.success && data.profile) {
+        if (!currentUser) {
+          // For guests, use localStorage as source of truth (server may return stale
+          // data due to ephemeral /tmp on Vercel serverless)
+          const localProfile = loadGuestProfile();
+          const isLocalNewer = localProfile.screeningTotalCount >= data.profile.screeningTotalCount &&
+            localProfile.email === data.profile.email;
+          if (isLocalNewer) {
+            setProfile(localProfile);
+            return;
+          }
+        }
         setProfile(data.profile);
+        if (!currentUser) saveGuestProfile(data.profile);
 
         // Keep Firestore users table up to date with server-side database
         if (currentUser) {
@@ -968,8 +991,13 @@ export default function App() {
           }
         }
 
-        // Refetch profile to show updated remaining quota
-        await fetchProfile(currentUser?.email || profile.email);
+        // Use profile from response for immediate update
+        if (resData.profile) {
+          setProfile(resData.profile);
+          if (!currentUser) saveGuestProfile(resData.profile);
+        } else {
+          await fetchProfile(currentUser?.email || profile.email);
+        }
       }
     } catch (err: any) {
       clearInterval(interval);

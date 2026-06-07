@@ -417,7 +417,7 @@ async function callAIWithFallback(promptText: string, systemInstruction: string,
 }
 
 // Multimodal fallback for payment audit (Gemini → OpenRouter vision)
-async function callAuditWithFallback(prompt: string, base64: string, mimeType: string): Promise<{ text: string }> {
+async function callAuditWithFallback(prompt: string, base64: string, mimeType: string): Promise<{ text: string } | null> {
   // 1. Try Gemini first
   try {
     const resp = await callGeminiWithRetry({
@@ -463,7 +463,7 @@ async function callAuditWithFallback(prompt: string, base64: string, mimeType: s
     }
   }
 
-  throw new Error("Semua provider AI untuk audit (Gemini, OpenRouter) gagal.");
+  return null; // Both failed — caller handles it gracefully
 }
 
 // API endpoint to retrieve or create current user profile
@@ -953,11 +953,11 @@ function generateCacheKey(cv: string, jd: string, email: string): string {
 
 // ==================== ALUR AKTIVASI LISENSI RESMI JAGOCV AI ====================
 
-// 1. Create a Payment Transaction (Initiates QRIS checkout)
+// 1. Create a Payment Transaction (Initiates QRIS checkout / CS chatbot upload)
 app.post("/api/billing/create-transaction", async (req, res) => {
   try {
     const dbData = await initDatabase();
-    const { email, paket } = req.body;
+    const { email, paket, source } = req.body;
 
     if (!email || (paket !== "BASIC" && paket !== "PRO" && paket !== "TRIAL")) {
       return res.status(400).json({ error: "Email dan paket yang valid (BASIC, PRO, atau TRIAL) wajib disertakan." });
@@ -965,13 +965,14 @@ app.post("/api/billing/create-transaction", async (req, res) => {
 
     const transactionId = `TX-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
     const nominal = paket === "PRO" ? 65000 : paket === "TRIAL" ? 10000 : 25000;
+    const status = source === "cs_chatbot" ? "PENDING VERIFIKASI MANUAL" : "PENDING";
 
     const newTx: JagoTransaction = {
       id: transactionId,
       email: email.trim().toLowerCase(),
       paket,
       nominal,
-      status: "PENDING",
+      status,
       createdAt: new Date().toISOString(),
       resendCount: 0,
       verifiedIdentity: false,
@@ -985,7 +986,7 @@ app.post("/api/billing/create-transaction", async (req, res) => {
       transactionId,
       paket,
       nominal,
-      status: "PENDING",
+      status,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -1321,7 +1322,14 @@ Output JSON:
       return res.json({ success: true, audit: result });
     }
 
-    res.status(500).json({ success: false, error: "Gagal mendapatkan respons dari AI." });
+    // All AI providers failed — return audit_unavailable instead of 500
+    return res.json({ success: true, audit_unavailable: true, audit: {
+      overall_verdict: "UNAVAILABLE",
+      ai_generation: { score: 0, indicators: [], conclusion: "Audit tidak tersedia: semua provider AI gagal." },
+      nominal_tampering: { score: 0, indicators: [], conclusion: "Audit tidak tersedia: semua provider AI gagal." },
+      payment_validation: { is_successful: null, merchant_match: null, nominal_match: null, details: "Audit tidak tersedia karena semua provider AI gagal." },
+      summary: "Sistem audit forensik tidak dapat dijalankan saat ini. Silakan coba lagi nanti."
+    }});
   } catch (error: any) {
     const rawMsg = error?.message || (error?.error?.message) || String(error || "");
     const errMsg = typeof rawMsg === "string" ? rawMsg : JSON.stringify(rawMsg);

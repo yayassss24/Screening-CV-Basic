@@ -330,7 +330,7 @@ export default function App() {
   const [csScreenshotBase64, setCsScreenshotBase64] = useState<string | null>(null);
   const [csScreenshotMime, setCsScreenshotMime] = useState("image/png");
   const [csScreenshotName, setCsScreenshotName] = useState("");
-  const [csChatStep, setCsChatStep] = useState<"welcome" | "input_details" | "waiting_payment" | "verifying" | "success" | "failed">("welcome");
+  const [csChatStep, setCsChatStep] = useState<"welcome" | "input_details" | "waiting_payment" | "verifying" | "pending_admin" | "success" | "failed">("welcome");
   const [csChatLogs, setCsChatLogs] = useState<Array<{ sender: "user" | "bot"; text: string; image?: string; timestamp: Date }>>([
     {
       sender: "bot" as const,
@@ -416,13 +416,14 @@ export default function App() {
           setCsChatLogs(updatedLogsBeforeFetch);
           setCsChatStep("verifying");
 
-          // 1. Create Transaction in Backend
+          // 1. Create Transaction in Backend (PENDING VERIFIKASI MANUAL)
           const txRes = await fetch("/api/billing/create-transaction", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               email: csEmailAktif,
               paket: csSelectedPackage,
+              source: "cs_chatbot",
             })
           });
           const txData = await txRes.json();
@@ -432,7 +433,7 @@ export default function App() {
 
           const transactionId = txData.transactionId;
 
-          // 1a. AI Fraud Audit before confirmation (non-blocking)
+          // 1a. AI Fraud Audit (non-blocking, purely informational)
           try {
             const auditRes = await fetch("/api/billing/audit-payment", {
               method: "POST",
@@ -452,46 +453,37 @@ export default function App() {
                   text: `🔍 Laporan Audit Forensik Pembayaran:\n\n• AI Generation: ${a.ai_generation?.score || 'N/A'}% — ${a.ai_generation?.conclusion || '-'}\n• Edit Nominal: ${a.nominal_tampering?.score || 'N/A'}% — ${a.nominal_tampering?.conclusion || '-'}\n• Status Pembayaran: ${a.payment_validation?.is_successful ? '✅ Valid' : '❌ Tidak Valid'}\n• Merchant Cocok: ${a.payment_validation?.merchant_match ? '✅ Ya' : '❌ Tidak'}\n• Nominal Cocok: ${a.payment_validation?.nominal_match ? '✅ Ya' : '❌ Tidak'}\n\nKesimpulan: ${a.summary || a.overall_verdict || '-'}`,
                   timestamp: new Date()
                 }]);
-                if (a.overall_verdict === "FAKE" || a.nominal_tampering?.score >= 70 || a.ai_generation?.score >= 70) {
-                  throw new Error(`Sistem mendeteksi indikasi kecurangan: ${a.summary || 'Gambar terdeteksi palsu atau diedit.'} Silakan unggah screenshot asli.`);
-                }
               }
             }
           } catch (auditErr: any) {
-            if (auditErr.message?.includes("mendeteksi indikasi kecurangan")) {
-              throw auditErr; // Block payment on fraud detection
+            // Audit unavailable — continue, no blocking
+          }
+
+          // 2. Inform user — pending admin verification
+          setCsChatStep("pending_admin");
+          setCsChatLogs(prev => [
+            ...prev,
+            {
+              sender: "bot" as const,
+              text: `✅ Bukti transfer berhasil diupload!
+
+📋 ID Transaksi: ${transactionId}
+
+⏳ Status: **MENUNGGU VERIFIKASI ADMIN**
+
+Pembayaran Anda sedang diperiksa oleh tim admin. Silakan tunggu konfirmasi.
+Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi setelah dikonfirmasi.
+
+Jika ada pertanyaan, hubungi admin via WhatsApp.`,
+              timestamp: new Date()
+            },
+            {
+              sender: "bot" as const,
+              text: `💡 Tips: Simpan ID Transaksi di atas untuk memudahkan komunikasi dengan admin.`,
+              timestamp: new Date()
             }
-            // Audit unavailable (quota, timeout, etc.) — continue payment
-          }
-
-          // 2. Auto-confirm payment (bypass AI verification)
-          const confirmRes = await fetch("/api/billing/admin/confirm", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              transactionId,
-              screenshotBase64: base64Payload,
-              screenshotMimeType: file.type || "image/png",
-            })
-          });
-          const confirmData = await confirmRes.json();
-
-          if (confirmRes.ok && confirmData.success) {
-            const kodeAktivasi = confirmData.activationCode || "";
-            setLastActivationCode(kodeAktivasi);
-            setCsChatStep("success");
-            setCsChatLogs(prev => [
-              ...prev,
-              {
-                sender: "bot" as const,
-                text: `✅ Pembayaran berhasil diverifikasi oleh Admin!\n\nPaket Anda: ${csSelectedPackage}\n\n🎫 Kode Aktivasi Anda:\n━━━━━━━━━━━━━━━━━━━\n${kodeAktivasi}\n━━━━━━━━━━━━━━━━━━━\n\nKode juga dikirim ke email: ${csEmailAktif}\nSalin kode di atas, lalu paste di kolom "Kode Aktivasi" pada header halaman untuk mengaktifkan fitur premium. Atau klik Aktivasi Otomatis di bawah.`,
-                timestamp: new Date()
-              }
-            ]);
-            await fetchTransactions();
-          } else {
-            throw new Error(confirmData.error || "Gagal konfirmasi pembayaran.");
-          }
+          ]);
+          await fetchTransactions();
         } catch (err: any) {
           console.error("Gagal melakukan otomatisasi pembayaran JagoCV via CS Bot:", err);
           setCsChatStep("failed");
@@ -3126,6 +3118,17 @@ export default function App() {
                 <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 text-center space-y-2 animate-pulse text-indigo-400 font-bold block">
                   <RefreshCw className="w-5 h-5 mx-auto animate-spin mb-1 text-indigo-400" />
                   <p className="text-[10.5px]">Sistem AI JagoCV sedang mengaudit lembaran struk Anda secara server-side...</p>
+                </div>
+              )}
+
+              {csChatStep === "pending_admin" && (
+                <div className="pt-2 space-y-2">
+                  <button
+                    onClick={handleCsResetChat}
+                    className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded-lg border border-slate-700 cursor-pointer text-center text-[10.5px]"
+                  >
+                    ← Mulai Sesi Chat Baru
+                  </button>
                 </div>
               )}
 

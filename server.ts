@@ -1866,7 +1866,7 @@ app.post("/api/billing/activate", async (req, res) => {
     dbData.users[targetEmail] = {
       email: targetEmail,
       paket: activeCode.paket,
-      screeningSisa: activeCode.paket === "PRO" ? "Unlimited" : 20,
+      screeningSisa: "Unlimited",
       screeningTotalCount: dbData.users[targetEmail]?.screeningTotalCount || 0,
       kodeAktif: activeCode.kodePlainForDbFileOnly || activeCode.kode || inputCodeClean,
       tanggalBerlaku: expireDateStr,

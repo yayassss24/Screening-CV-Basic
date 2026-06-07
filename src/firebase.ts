@@ -10,7 +10,7 @@ const config = {
 
 const app = initializeApp(config);
 
-export const db = getFirestore(app, config.firestoreDatabaseId || "(default)");
+export const db = getFirestore(app, (config as any).firestoreDatabaseId || "(default)");
 export const auth = getAuth(app);
 
 const APP_DOMAIN = "jagocv.app";

@@ -103,6 +103,10 @@ export interface JagoCVAnalysisResult {
     penutup: string;
     full_text: string;
   };
+  incomplete_warning?: {
+    masalah: string;
+    rekomendasi: string;
+  };
 }
 
 export interface UserProfile {

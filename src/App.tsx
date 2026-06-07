@@ -1608,10 +1608,10 @@ export default function App() {
         doc.text("2. Rencana Aksi Pemenuhan Kualifikasi:", marginX, y);
         y += 5.5;
 
-        const ra = sdp.rencana_aksi || {};
-        writeWrapped(`• Jangka Pendek (1-3 bulan): ${ra.jangka_pendek || "-"}`, contentWidth - 5, 8.5, "normal", [30, 41, 59], 3, 4.5, 2);
-        writeWrapped(`• Jangka Menengah (3-6 bulan): ${ra.jangka_menengah || "-"}`, contentWidth - 5, 8.5, "normal", [30, 41, 59], 3, 4.5, 2);
-        writeWrapped(`• Jangka Panjang (6-12 bulan): ${ra.jangka_panjang || "-"}`, contentWidth - 5, 8.5, "normal", [30, 41, 59], 3, 4.5, 3);
+        const ra = sdp.rencana_aksi as { jangka_pendek?: string; jangka_menengah?: string; jangka_panjang?: string } | undefined;
+        writeWrapped(`• Jangka Pendek (1-3 bulan): ${ra?.jangka_pendek || "-"}`, contentWidth - 5, 8.5, "normal", [30, 41, 59], 3, 4.5, 2);
+        writeWrapped(`• Jangka Menengah (3-6 bulan): ${ra?.jangka_menengah || "-"}`, contentWidth - 5, 8.5, "normal", [30, 41, 59], 3, 4.5, 2);
+        writeWrapped(`• Jangka Panjang (6-12 bulan): ${ra?.jangka_panjang || "-"}`, contentWidth - 5, 8.5, "normal", [30, 41, 59], 3, 4.5, 3);
 
         checkPageBreak(20);
         doc.setFont("helvetica", "bold");

@@ -2266,8 +2266,8 @@ function render(){
         html+='<a href="/api/billing/admin/screenshot/'+encodeURIComponent(tx.id)+'" target="_blank" class="btn btn-sm" style="background:#6366f1;color:#fff;text-decoration:none">📷 Lihat</a>';
       }
       if(canAct){
-        html+='<button class="btn btn-confirm btn-sm" onclick=\\'confirmTx('+JSON.stringify(tx.id)+')\'>✅ Konfirmasi</button>';
-        html+='<button class="btn btn-reject btn-sm" onclick=\\'rejectTx('+JSON.stringify(tx.id)+')\'>❌ Tolak</button>';
+        html+='<button class="btn btn-confirm btn-sm" onclick=\\'confirmTx('+JSON.stringify(tx.id)+')\\'>✅ Konfirmasi</button>';
+        html+='<button class="btn btn-reject btn-sm" onclick=\\'rejectTx('+JSON.stringify(tx.id)+')\\'>❌ Tolak</button>';
       } else {
         html+='<span style="color:#94a3b8;font-size:11px">—</span>';
       }

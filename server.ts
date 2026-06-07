@@ -11,15 +11,24 @@ import OpenAI from "openai";
 // Firebase Admin SDK (server-side, for persistent Firestore storage on Vercel)
 let firestoreDb: any = null;
 let adminAppInitialized = false;
+let firestoreInitError: string | null = null;
 
 async function initFirestoreAdmin() {
   if (adminAppInitialized) return;
   const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
-  if (!sa) return;
+  if (!sa) { console.warn("[FIRESTORE] FIREBASE_SERVICE_ACCOUNT not set"); return; }
   try {
     const fbAdmin = await import("firebase-admin");
     if (!fbAdmin.apps.length) {
-      const serviceAccount = JSON.parse(sa);
+      let serviceAccount: any;
+      try {
+        serviceAccount = JSON.parse(sa);
+      } catch (parseErr: any) {
+        firestoreInitError = `JSON.parse: ${parseErr.message}`;
+        console.error("[FIRESTORE] JSON.parse failed:", parseErr.message);
+        console.error("[FIRESTORE] First 200 chars:", sa.substring(0, 200));
+        return;
+      }
       fbAdmin.initializeApp({
         credential: fbAdmin.credential.cert(serviceAccount),
       });
@@ -28,7 +37,9 @@ async function initFirestoreAdmin() {
     adminAppInitialized = true;
     console.log("[FIRESTORE] Firebase Admin initialized");
   } catch (e: any) {
-    console.warn("[FIRESTORE] Init failed, using file fallback:", e.message);
+    firestoreInitError = `${e.message}`;
+    console.error("[FIRESTORE] Init failed, using file fallback:", e.message);
+    console.error("[FIRESTORE] Stack:", e.stack?.substring(0, 500));
   }
 }
 
@@ -2352,6 +2363,7 @@ app.get("/api/debug/firestore", async (req, res) => {
   const status: any = {
     firestoreDb: firestoreDb !== null,
     adminAppInitialized,
+    firestoreInitError: typeof firestoreInitError !== 'undefined' ? firestoreInitError : null,
     hasServiceAccount: !!process.env.FIREBASE_SERVICE_ACCOUNT,
     serviceAccountLength: process.env.FIREBASE_SERVICE_ACCOUNT?.length || 0,
     vercel: !!process.env.VERCEL,

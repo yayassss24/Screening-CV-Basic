@@ -2194,11 +2194,11 @@ tr:hover{background:#f8fafc}
 .btn-reject:hover{background:#b91c1c}
 .btn-sm{padding:4px 10px;font-size:10px}
 .actions{display:flex;gap:4px}
-#login{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:80vh;gap:12px}
-#login input{padding:10px 14px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;width:260px}
-#login button{padding:10px 24px;background:#1e40af;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700}
-#login button:hover{background:#1d4ed8}
-#login .error{color:#dc2626;font-size:13px}
+#loginPage{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:80vh;gap:12px}
+#loginPage input{padding:10px 14px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;width:260px}
+#loginPage button{padding:10px 24px;background:#1e40af;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700}
+#loginPage button:hover{background:#1d4ed8}
+#loginPage .error{color:#dc2626;font-size:13px}
 .loading{text-align:center;padding:40px;color:#94a3b8;font-size:13px}
 code{background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:11px}
 .toast{position:fixed;bottom:20px;right:20px;padding:12px 20px;border-radius:10px;color:#fff;font-size:13px;font-weight:600;z-index:999;animation:fadeIn .3s}
@@ -2209,20 +2209,20 @@ code{background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:11px}
 </head>
 <body>
 <div id="app">
-<div id="login">
+<div id="loginPage">
 <h1 style="font-size:28px;margin-bottom:4px">🔐 Admin JagoCV</h1>
 <p class="sub" style="margin-bottom:8px">Masukkan kode aktivasi admin</p>
-<input type="text" id="codeInput" placeholder="Kode Aktivasi" autocomplete="off" onkeydown="if(event.key==='Enter')login()"/>
-<button onclick="login()">Masuk</button>
+<input type="text" id="codeInput" placeholder="Kode Aktivasi" autocomplete="off" onkeydown="if(event.key==='Enter')adminLogin()"/>
+<button onclick="adminLogin()">Masuk</button>
 <p class="error" id="loginError"></p>
 </div>
 </div>
 <script>
 const ADMIN_CODE = ${JSON.stringify(adminCode)};
-function login(){
+function adminLogin(){
   const val=document.getElementById('codeInput').value.trim();
   if(val===ADMIN_CODE){
-    document.getElementById('login').style.display='none';
+    document.getElementById('loginPage').style.display='none';
     loadTransactions();
   } else {
     document.getElementById('loginError').textContent='Kode aktivasi salah!';
@@ -2266,8 +2266,8 @@ function render(){
         html+='<a href="/api/billing/admin/screenshot/'+encodeURIComponent(tx.id)+'" target="_blank" class="btn btn-sm" style="background:#6366f1;color:#fff;text-decoration:none">📷 Lihat</a>';
       }
       if(canAct){
-        html+='<button class="btn btn-confirm btn-sm" onclick=\'confirmTx('+JSON.stringify(tx.id)+')\'>✅ Konfirmasi</button>';
-        html+='<button class="btn btn-reject btn-sm" onclick=\'rejectTx('+JSON.stringify(tx.id)+')\'>❌ Tolak</button>';
+        html+='<button class="btn btn-confirm btn-sm" onclick=\\'confirmTx('+JSON.stringify(tx.id)+')\'>✅ Konfirmasi</button>';
+        html+='<button class="btn btn-reject btn-sm" onclick=\\'rejectTx('+JSON.stringify(tx.id)+')\'>❌ Tolak</button>';
       } else {
         html+='<span style="color:#94a3b8;font-size:11px">—</span>';
       }

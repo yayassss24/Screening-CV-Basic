@@ -3,14 +3,27 @@ import { join } from "path";
 import crypto from "crypto";
 
 const DB_PATH = join(process.cwd(), "db.json");
+const TMP_PATH = join("/tmp", "transactions.json");
 
-function readDb(): any {
-  if (!existsSync(DB_PATH)) return { users: {}, activation_codes: [], analyses: [], transactions: [] };
-  return JSON.parse(readFileSync(DB_PATH, "utf-8"));
-}
-
+// In-memory cache (survives within same serverless instance)
+let memTransactions: any[] | null = null;
 let firestoreDb: any = null;
 let fsInitDone = false;
+
+function loadFileTransactions(): any[] {
+  const p = existsSync(TMP_PATH) ? TMP_PATH : DB_PATH;
+  if (!existsSync(p)) return [];
+  try { return JSON.parse(readFileSync(p, "utf-8")).transactions || []; }
+  catch { return []; }
+}
+
+function saveFileTransactions(txns: any[]) {
+  try {
+    const { writeFileSync } = require("fs");
+    writeFileSync(TMP_PATH, JSON.stringify({ transactions: txns }, null, 2), "utf-8");
+  } catch {}
+}
+
 async function initFirestore() {
   if (fsInitDone) return firestoreDb;
   const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
@@ -29,35 +42,72 @@ async function initFirestore() {
   }
 }
 
-let diagLog: string[] = [];
-function diag(msg: string) { diagLog.push(msg); console.log("[ADMIN-API]", msg); }
-
 async function readAllTransactions(): Promise<any[]> {
-  diagLog = [];
+  if (memTransactions) return memTransactions;
   const db = await initFirestore();
   if (db) {
-    diag("Firestore initialized, reading transactions...");
     try {
       const snap = await db.collection("transactions").get();
       const txns: any[] = [];
       snap.forEach((doc: any) => txns.push({ id: doc.id, ...doc.data() }));
-      diag(`Firestore returned ${txns.length} transactions`);
-      return txns;
+      memTransactions = txns;
+      return memTransactions;
     } catch (e: any) {
-      diag(`Firestore read error: ${e.message}`);
+      console.log("[ADMIN-API] Firestore read error:", e.message);
     }
-  } else {
-    diag("Firestore not available, falling back to db.json");
   }
-  const dbData = readDb();
-  const count = (dbData.transactions || []).length;
-  diag(`db.json fallback: ${count} transactions`);
-  return dbData.transactions || [];
+  const fileTx = loadFileTransactions();
+  if (fileTx.length > 0) {
+    memTransactions = fileTx;
+    return memTransactions;
+  }
+  return [];
+}
+
+async function saveTransactionToAll(tx: any, screenshotBase64?: string, screenshotMimeType?: string) {
+  const db = await initFirestore();
+  if (db) {
+    try {
+      await db.collection("transactions").doc(tx.id).set(tx);
+      if (screenshotBase64) {
+        await db.collection("screenshots").doc(tx.id).set({ screenshotBase64, screenshotMimeType: screenshotMimeType || "image/png" });
+      }
+      return "firestore";
+    } catch (e: any) {
+      console.log("[ADMIN-API] Firestore write error:", e.message);
+    }
+  }
+  // Fallback: in-memory + /tmp/transactions.json
+  const all = loadFileTransactions();
+  all.push(tx);
+  saveFileTransactions(all);
+  memTransactions = all;
+  return "file";
 }
 
 async function readTransaction(id: string): Promise<any | null> {
   const all = await readAllTransactions();
   return all.find((t: any) => t.id === id) || null;
+}
+
+async function updateTransactionInAll(id: string, updates: Record<string, any>) {
+  // Update Firestore
+  const db = await initFirestore();
+  if (db) {
+    try {
+      await db.collection("transactions").doc(id).update(updates);
+    } catch (e: any) {
+      console.log("[ADMIN-API] Firestore update error:", e.message);
+    }
+  }
+  // Update file + in-memory
+  const all = loadFileTransactions();
+  const idx = all.findIndex((t: any) => t.id === id);
+  if (idx !== -1) {
+    all[idx] = { ...all[idx], ...updates };
+    saveFileTransactions(all);
+    memTransactions = all;
+  }
 }
 
 function readBody(req: any): Promise<string> {
@@ -111,46 +161,10 @@ export default async function handler(req: any, res: any) {
         hasScreenshot: !!screenshotBase64,
       };
 
-      let savedTo = "none";
-      const db = await initFirestore();
-      if (db) {
-        diag("Attempting to save transaction to Firestore...");
-        try {
-          await db.collection("transactions").doc(tx.id).set(tx);
-          diag("Transaction saved to Firestore OK");
-          if (screenshotBase64) {
-            try {
-              await db.collection("screenshots").doc(tx.id).set({
-                screenshotBase64,
-                screenshotMimeType: screenshotMimeType || "image/png",
-              });
-              diag("Screenshot saved to Firestore OK");
-            } catch (ssErr: any) {
-              diag(`Screenshot Firestore error: ${ssErr.message}`);
-            }
-          }
-          savedTo = "firestore";
-        } catch (fsErr: any) {
-          diag(`Firestore write error: ${fsErr.message}`);
-          diag("Falling back to db.json...");
-        }
-      }
-      if (savedTo !== "firestore") {
-        diag("Attempting db.json fallback save...");
-        try {
-          const dbData = readDb();
-          dbData.transactions.push({ ...tx, screenshotBase64, screenshotMimeType });
-          const { writeFileSync } = await import("fs");
-          writeFileSync(DB_PATH, JSON.stringify(dbData, null, 2));
-          savedTo = "db.json";
-          diag("Saved to db.json OK");
-        } catch (jsonErr: any) {
-          diag(`db.json write error: ${jsonErr.message}`);
-        }
-      }
+      const savedTo = await saveTransactionToAll(tx, screenshotBase64, screenshotMimeType);
 
       res.setHeader("Content-Type", "application/json");
-      res.status(200).end(JSON.stringify({ success: true, transactionId, paket, nominal, status, savedTo, diag: diagLog }));
+      res.status(200).end(JSON.stringify({ success: true, transactionId, paket, nominal, status, savedTo }));
       return;
     }
 
@@ -202,7 +216,6 @@ export default async function handler(req: any, res: any) {
         dbJsonExists,
         firestoreGetError,
         firestoreSetError,
-        diag: diagLog,
       }));
       return;
     }
@@ -286,28 +299,11 @@ export default async function handler(req: any, res: any) {
       const expireSub = new Date();
       expireSub.setDate(expireSub.getDate() + 30);
 
-      // Update Firestore
-      const db = await initFirestore();
-      if (db) {
-        try {
-          await db.collection("transactions").doc(tx.id).update({
-            status: "PAID",
-            verified_at: tx.verified_at,
-            codePlainForDb: activationCode,
-          });
-          const codeData = {
-            hash,
-            kodePlainForDbFileOnly: activationCode,
-            paket: tx.paket,
-            digunakan: false,
-            emailPenerima: tx.email,
-            tanggalCadaluwarsa: expireSub.toISOString().split("T")[0],
-            createdAt: new Date().toISOString(),
-            expiresAt: expiresAt.toISOString(),
-          };
-          await db.collection("activation_codes").add(codeData);
-        } catch {}
-      }
+      await updateTransactionInAll(tx.id, {
+        status: "PAID",
+        verified_at: tx.verified_at,
+        codePlainForDb: activationCode,
+      });
 
       res.setHeader("Content-Type", "application/json");
       res.status(200).end(JSON.stringify({ success: true, message: "Transaksi dikonfirmasi" }));
@@ -333,16 +329,10 @@ export default async function handler(req: any, res: any) {
         return;
       }
 
-      // Update Firestore
-      const db = await initFirestore();
-      if (db) {
-        try {
-          await db.collection("transactions").doc(tx.id).update({
-            status: "FAILED",
-            verified_at: new Date().toISOString(),
-          });
-        } catch {}
-      }
+      await updateTransactionInAll(tx.id, {
+        status: "FAILED",
+        verified_at: new Date().toISOString(),
+      });
 
       res.setHeader("Content-Type", "application/json");
       res.status(200).end(JSON.stringify({ success: true, message: "Transaksi ditolak" }));

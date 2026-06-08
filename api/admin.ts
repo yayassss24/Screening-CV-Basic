@@ -1,6 +1,4 @@
-import { VercelRequest, VercelResponse } from "@vercel/node";
-
-export default function handler(_req: VercelRequest, res: VercelResponse) {
+export default function handler(_req: any, res: any) {
   const adminCode = process.env.ADMIN_ACTIVATION_CODE || "JAGO-ADMIN-2024";
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.status(200).send(`<!DOCTYPE html>

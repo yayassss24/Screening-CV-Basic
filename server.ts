@@ -117,6 +117,13 @@ const PORT = 3000;
 
 app.use(express.json({ limit: "20mb" }));
 
+// Global Express error handler — ensures every error returns JSON, not HTML
+app.use((err: any, req: any, res: any, next: any) => {
+  if (res.headersSent) return next(err);
+  console.error("[GLOBAL ERROR HANDLER]", err?.message || err);
+  res.status(err?.status || 500).json({ error: err?.message || "Internal server error" });
+});
+
 // Initialize the local JSON Database path inside the project root
 const DB_PATH = process.env.VERCEL
   ? path.join("/tmp", "db.json")

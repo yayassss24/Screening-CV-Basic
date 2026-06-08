@@ -451,7 +451,13 @@ export default function App() {
               screenshotMimeType: file.type || "image/png",
             })
           });
-          const txData = await txRes.json();
+          let txData: any;
+          try {
+            txData = await txRes.json();
+          } catch {
+            const bodyText = await txRes.text();
+            throw new Error(`Server error: ${bodyText.slice(0, 200)}`);
+          }
           if (!txData.success) {
             throw new Error(txData.error || "Gagal membuat ID Transaksi.");
           }

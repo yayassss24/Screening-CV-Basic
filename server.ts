@@ -975,6 +975,19 @@ const MAX_JD_CHARS = 2000;
 // --- HEMAT QUOTA: Screenshot hash pool untuk deteksi bukti bayar palsu/reused ---
 const screenshotHashPool = new Set<string>();
 
+// Global Tesseract worker cache — dibuat sekali, dipakai semua request
+let tesseractWorker: any = null;
+async function getTesseractWorker() {
+  if (tesseractWorker) return tesseractWorker;
+  const { createWorker } = await import("tesseract.js");
+  tesseractWorker = await createWorker("ind+eng");
+  console.log("[TESSERACT] Worker siap (cache global)");
+  return tesseractWorker;
+}
+
+// Warmup Tesseract di background saat server start
+getTesseractWorker().catch((e) => console.warn("[TESSERACT] Warmup gagal:", e.message));
+
 const PAKET_PRICES: Record<string, number> = {
   TRIAL: 10000,
   BASIC: 75000,
@@ -1057,11 +1070,9 @@ async function verifyPaymentScreenshot(
       return "Bukti pembayaran ini sudah terdaftar di transaksi sebelumnya. Gunakan bukti baru.";
     }
 
-    // 2. OCR untuk ekstrak nominal
-    const { createWorker } = await import("tesseract.js");
-    const worker = await createWorker("ind+eng");
+    // 2. OCR untuk ekstrak nominal (pakai cached worker global)
+    const worker = await getTesseractWorker();
     const { data } = await worker.recognize(buffer);
-    await worker.terminate();
 
     const ocrText = data.text || "";
 
@@ -1144,118 +1155,8 @@ app.post("/api/billing/create-transaction", async (req, res) => {
     dbData.transactions.push(newTx);
     await saveDatabase(dbData);
 
-    // Auto-verify payment: Python Bot (barcode/QR/OCR) -> fallback Tesseract.js OCR
-    if (screenshotBase64) {
-      try {
-        // 1. Try Python bot first
-        const pyResult = await verifyWithPythonBot(screenshotBase64, transactionId, nominal);
-        let errorMsg: string | null = null;
-        let verifyMethod = "TESSERACT_JS";
-
-        if (pyResult) {
-          verifyMethod = `PYTHON_BOT_${pyResult.method || "UNKNOWN"}`;
-
-          if (pyResult.status === "ACCEPTED") {
-            errorMsg = null; // success
-          } else if (pyResult.status === "REJECTED") {
-            errorMsg = pyResult.reason || "Nominal pembayaran tidak sesuai.";
-          } else {
-            // ESCALATED — fallback to Tesseract.js
-            console.log(`[PYTHON BOT] Eskalasi: ${pyResult.reason}, fallback ke OCR...`);
-            errorMsg = await verifyPaymentScreenshot(screenshotBase64, paket, dbData);
-            verifyMethod = "TESSERACT_JS_FALLBACK";
-          }
-        } else {
-          // Python bot not available, fallback to Tesseract.js
-          errorMsg = await verifyPaymentScreenshot(screenshotBase64, paket, dbData);
-          verifyMethod = "TESSERACT_JS";
-        }
-
-        newTx.verified_at = new Date().toISOString();
-
-        if (errorMsg === null) {
-          // ✅ Nominal SESUAI — ACCEPTED
-          newTx.status = "PAID";
-          newTx.ai_recommendation = "ACCEPTED";
-          newTx.screenshotHash = crypto.createHash("md5").update(Buffer.from(screenshotBase64, "base64")).digest("hex");
-
-          // Generate activation code
-          const chars = "0123456789";
-          const genPart = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-          const activationCode = `JCV-${newTx.paket}-${genPart()}-${genPart()}`;
-          const hash = crypto.createHash("sha256").update(activationCode).digest("hex");
-
-          const expiresAt = new Date();
-          expiresAt.setHours(expiresAt.getHours() + 48);
-
-          const expireSub = new Date();
-          expireSub.setDate(expireSub.getDate() + 30);
-
-          const newCode: ActivationCode = {
-            hash,
-            kodePlainForDbFileOnly: activationCode,
-            paket: newTx.paket,
-            digunakan: false,
-            emailPenerima: newTx.email,
-            tanggalCadaluwarsa: expireSub.toISOString().split("T")[0],
-            createdAt: new Date().toISOString(),
-            expiresAt: expiresAt.toISOString(),
-          };
-
-          dbData.activation_codes.push(newCode);
-          newTx.codePlainForDb = activationCode;
-
-          console.log(`
-======================================================================
-[PAYMENT BOT - PEMBAYARAN DITERIMA | ${verifyMethod}]
-Ke Tujuan   : ${newTx.email}
-Subjek      : Kode Aktivasi JagoCV AI — Paket ${newTx.paket}
-Isi Pesan   :
-----------------------------------------------------------------------
-Halo ${newTx.email.split("@")[0]},
-
-Terima kasih! Pembayaran Anda telah terverifikasi otomatis oleh Payment Bot.
-
-Paket: ${newTx.paket}
-Kode Aktivasi: ${activationCode}
-----------------------------------------------------------------------
-          `);
-        } else {
-          // ❌ Nominal TIDAK SESUAI — REJECTED
-          newTx.status = "FAILED";
-          newTx.ai_recommendation = "REJECTED";
-          newTx.ai_reason = errorMsg;
-          newTx.verification_message = errorMsg;
-        }
-      } catch (err: any) {
-        // ⚠️ Semua metode gagal — PENDING, eskalasi ke admin
-        newTx.status = "PENDING VERIFIKASI MANUAL";
-        newTx.ai_recommendation = "PENDING";
-        newTx.verification_message = "Gagal membaca bukti pembayaran. Silakan kirim ulang dengan gambar yang lebih jelas.";
-        console.error("[PAYMENT BOT] Semua metode gagal:", err?.message || err);
-      }
-
-      await saveDatabase(dbData);
-    }
-
-    // Notify admin via WhatsApp with bot decision
-    if (source === "cs_chatbot") {
-      const adminPhone = process.env.ADMIN_WA || "6281234567890";
-      const nominalStr = nominal.toLocaleString("id-ID");
-      const statusIcon = newTx.status === "PAID" ? "✅" : newTx.status === "FAILED" ? "❌" : "⚠️";
-      sendWaNotification(adminPhone,
-        `${statusIcon} *Payment Bot JagoCV*\n\n` +
-        `📧 Email: ${email.trim().toLowerCase()}\n` +
-        `📦 Paket: *${paket}*\n` +
-        `💰 Nominal: Rp ${nominalStr}\n` +
-        `🆔 ID: ${transactionId}\n` +
-        `📌 Status: *${newTx.status}*\n` +
-        (newTx.verification_message ? `📝 Catatan: ${newTx.verification_message}\n` : "") +
-        `🔗 Dashboard: ${process.env.ADMIN_DASHBOARD_URL || "-"}`
-      );
-    }
-
-    const needsInput = newTx.status !== "PAID" && newTx.status !== "FAILED" && !!screenshotBase64;
+    // ⚡ RESPOND CEPAT KE USER — verifikasi jalan di background
+    const needsInput = !!screenshotBase64;
 
     res.json({
       success: true,
@@ -1263,11 +1164,115 @@ Kode Aktivasi: ${activationCode}
       paket,
       nominal,
       status: newTx.status,
-      ai_recommendation: newTx.ai_recommendation,
-      ai_reason: newTx.ai_reason || undefined,
-      verification_message: newTx.verification_message,
-      needsInput,
     });
+
+    // ─── BACKGROUND: Auto-verify payment ─────────────────────────────────
+    if (screenshotBase64) {
+      (async () => {
+        try {
+          const pyResult = await verifyWithPythonBot(screenshotBase64, transactionId, nominal);
+          let errorMsg: string | null = null;
+          let verifyMethod = "TESSERACT_JS";
+
+          if (pyResult) {
+            verifyMethod = `PYTHON_BOT_${pyResult.method || "UNKNOWN"}`;
+            if (pyResult.status === "ACCEPTED") {
+              errorMsg = null;
+            } else if (pyResult.status === "REJECTED") {
+              errorMsg = pyResult.reason || "Nominal pembayaran tidak sesuai.";
+            } else {
+              console.log(`[PYTHON BOT] Eskalasi: ${pyResult.reason}, fallback ke OCR...`);
+              errorMsg = await verifyPaymentScreenshot(screenshotBase64, paket, dbData);
+              verifyMethod = "TESSERACT_JS_FALLBACK";
+            }
+          } else {
+            errorMsg = await verifyPaymentScreenshot(screenshotBase64, paket, dbData);
+            verifyMethod = "TESSERACT_JS";
+          }
+
+          newTx.verified_at = new Date().toISOString();
+
+          if (errorMsg === null) {
+            newTx.status = "PAID";
+            newTx.ai_recommendation = "ACCEPTED";
+            newTx.screenshotHash = crypto.createHash("md5").update(Buffer.from(screenshotBase64, "base64")).digest("hex");
+            newTx.ai_reason = null;
+            newTx.verification_message = "";
+
+            const chars = "0123456789";
+            const genPart = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+            const activationCode = `JCV-${newTx.paket}-${genPart()}-${genPart()}`;
+            const hash = crypto.createHash("sha256").update(activationCode).digest("hex");
+            const expiresAt = new Date();
+            expiresAt.setHours(expiresAt.getHours() + 48);
+            const expireSub = new Date();
+            expireSub.setDate(expireSub.getDate() + 30);
+
+            dbData.activation_codes.push({
+              hash,
+              kodePlainForDbFileOnly: activationCode,
+              paket: newTx.paket,
+              digunakan: false,
+              emailPenerima: newTx.email,
+              tanggalCadaluwarsa: expireSub.toISOString().split("T")[0],
+              createdAt: new Date().toISOString(),
+              expiresAt: expiresAt.toISOString(),
+            });
+            newTx.codePlainForDb = activationCode;
+
+            console.log(`
+======================================================================
+[PAYMENT BOT - BACKGROUND | ${verifyMethod}] ✅ PEMBAYARAN DITERIMA
+Order: ${transactionId} | Email: ${newTx.email} | Paket: ${newTx.paket}
+Kode: ${activationCode}
+======================================================================
+            `);
+          } else {
+            newTx.status = "FAILED";
+            newTx.ai_recommendation = "REJECTED";
+            newTx.ai_reason = errorMsg;
+            newTx.verification_message = errorMsg;
+            console.log(`[PAYMENT BOT - BACKGROUND | ${verifyMethod}] ❌ DITOLAK: ${errorMsg}`);
+          }
+        } catch (err: any) {
+          newTx.status = "PENDING VERIFIKASI MANUAL";
+          newTx.ai_recommendation = "PENDING";
+          newTx.verification_message = "Gagal membaca bukti pembayaran. Silakan kirim ulang dengan gambar yang lebih jelas.";
+          console.error("[PAYMENT BOT - BACKGROUND] Gagal:", err?.message || err);
+        }
+
+        await saveDatabase(dbData);
+
+        // WA notification (async, tidak blocking)
+        if (source === "cs_chatbot") {
+          const adminPhone = process.env.ADMIN_WA || "6281234567890";
+          const nominalStr = nominal.toLocaleString("id-ID");
+          const statusIcon = newTx.status === "PAID" ? "✅" : newTx.status === "FAILED" ? "❌" : "⚠️";
+          sendWaNotification(adminPhone,
+            `${statusIcon} *Payment Bot JagoCV*\n\n` +
+            `📧 Email: ${email.trim().toLowerCase()}\n` +
+            `📦 Paket: *${paket}*\n` +
+            `💰 Nominal: Rp ${nominalStr}\n` +
+            `🆔 ID: ${transactionId}\n` +
+            `📌 Status: *${newTx.status}*\n` +
+            (newTx.verification_message ? `📝 Catatan: ${newTx.verification_message}\n` : "") +
+            `🔗 Dashboard: ${process.env.ADMIN_DASHBOARD_URL || "-"}`
+          );
+        }
+      })();
+    } else if (source === "cs_chatbot") {
+      // No screenshot — langsung notify admin
+      const adminPhone = process.env.ADMIN_WA || "6281234567890";
+      const nominalStr = nominal.toLocaleString("id-ID");
+      sendWaNotification(adminPhone,
+        `⚠️ *Pembayaran Baru JagoCV (tanpa bukti)*\n\n` +
+        `📧 Email: ${email.trim().toLowerCase()}\n` +
+        `📦 Paket: *${paket}*\n` +
+        `💰 Nominal: Rp ${nominalStr}\n` +
+        `🆔 ID: ${transactionId}\n` +
+        `📌 Status: *${newTx.status}*\n`
+      );
+    }
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

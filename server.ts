@@ -788,7 +788,9 @@ app.post("/api/billing/admin/confirm", async (req, res) => {
         return res.status(400).json({ error: errorMsg });
       }
       // Simpan hash screenshot ke transaksi untuk cek reuse
-      tx.screenshotHash = crypto.createHash("md5").update(Buffer.from(screenshotBase64, "base64")).digest("hex");
+      const admHash = crypto.createHash("md5").update(Buffer.from(screenshotBase64, "base64")).digest("hex");
+      tx.screenshotHash = admHash;
+      addHash(admHash);
     }
 
     tx.status = "PAID";
@@ -974,6 +976,15 @@ const MAX_JD_CHARS = 2000;
 
 // --- HEMAT QUOTA: Screenshot hash pool untuk deteksi bukti bayar palsu/reused ---
 const screenshotHashPool = new Set<string>();
+// Batasi ukuran pool biar gak bocor memory
+const HASH_POOL_MAX = 1000;
+function addHash(hash: string) {
+  if (screenshotHashPool.size >= HASH_POOL_MAX) {
+    const first = screenshotHashPool.values().next().value;
+    if (first) screenshotHashPool.delete(first);
+  }
+  screenshotHashPool.add(hash);
+}
 
 // Global Tesseract worker cache — dibuat sekali, dipakai semua request
 let tesseractWorker: any = null;
@@ -985,8 +996,19 @@ async function getTesseractWorker() {
   return tesseractWorker;
 }
 
+// Reset worker jika error — biar request berikutnya bikin baru
+function resetTesseractWorker() {
+  if (tesseractWorker) {
+    tesseractWorker.terminate?.().catch(() => {});
+    tesseractWorker = null;
+  }
+}
+
 // Warmup Tesseract di background saat server start
-getTesseractWorker().catch((e) => console.warn("[TESSERACT] Warmup gagal:", e.message));
+getTesseractWorker().catch((e) => {
+  console.warn("[TESSERACT] Warmup gagal:", e.message);
+  tesseractWorker = null;
+});
 
 const PAKET_PRICES: Record<string, number> = {
   TRIAL: 10000,
@@ -1105,11 +1127,12 @@ async function verifyPaymentScreenshot(
     }
 
     // Simpan hash untuk cek reuse berikutnya
-    screenshotHashPool.add(hash);
+    addHash(hash);
     
     return null;
   } catch (err: any) {
     console.error("[VERIFY SCREENSHOT ERROR]", err.message);
+    resetTesseractWorker(); // worker mungkin corrupt — reset biar request berikutnya bikin baru
     return null; // fallback: jika OCR gagal, izinkan lewat (graceful degradation)
   }
 }
@@ -1156,8 +1179,6 @@ app.post("/api/billing/create-transaction", async (req, res) => {
     await saveDatabase(dbData);
 
     // ⚡ RESPOND CEPAT KE USER — verifikasi jalan di background
-    const needsInput = !!screenshotBase64;
-
     res.json({
       success: true,
       transactionId,
@@ -1241,9 +1262,14 @@ Kode: ${activationCode}
           console.error("[PAYMENT BOT - BACKGROUND] Gagal:", err?.message || err);
         }
 
-        await saveDatabase(dbData);
+        // Save updated transaction (dibungkus error handler biar gak crash server)
+        try {
+          await saveDatabase(dbData);
+        } catch (dbErr: any) {
+          console.error("[PAYMENT BOT - BACKGROUND] Gagal simpan DB:", dbErr?.message || dbErr);
+        }
 
-        // WA notification (async, tidak blocking)
+        // WA notification (fire & forget, error handling internal)
         if (source === "cs_chatbot") {
           const adminPhone = process.env.ADMIN_WA || "6281234567890";
           const nominalStr = nominal.toLocaleString("id-ID");
@@ -1259,7 +1285,9 @@ Kode: ${activationCode}
             `🔗 Dashboard: ${process.env.ADMIN_DASHBOARD_URL || "-"}`
           );
         }
-      })();
+      })().catch((bgErr) => {
+        console.error("[PAYMENT BOT - BACKGROUND] Unhandled error:", bgErr?.message || bgErr);
+      });
     } else if (source === "cs_chatbot") {
       // No screenshot — langsung notify admin
       const adminPhone = process.env.ADMIN_WA || "6281234567890";

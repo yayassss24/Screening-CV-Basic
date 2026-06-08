@@ -335,7 +335,7 @@ export default function App() {
   }, [currentUser, profile.email]);
 
   useEffect(() => {
-    if (csChatStep !== "pending_admin") return;
+    if (csChatStep !== "pending_admin" || !csTransactionId) return;
     const interval = setInterval(async () => {
       const email = csEmailAktif;
       if (!email) return;
@@ -344,20 +344,22 @@ export default function App() {
         if (!res.ok) return;
         const data = await res.json();
         if (!data.success || !data.transactions?.length) return;
-        const latestTx = data.transactions[0];
-        if (latestTx.status === "PAID") {
-          setLastActivationCode(latestTx.codePlainForDb || "");
+        const myTx = data.transactions.find((t: any) => t.id === csTransactionId);
+        if (!myTx) return;
+        if (myTx.status === "PAID") {
+          setLastActivationCode(myTx.codePlainForDb || "");
           setCsChatStep("success");
           setCsChatLogs(prev => [...prev, {
             sender: "bot" as const,
-            text: `🎉 Pembayaran Anda telah **DIVERIFIKASI** oleh admin! Paket **${csSelectedPackage}** Anda siap digunakan.`,
+            text: `🎉 Pembayaran Anda telah **DIVERIFIKASI**! Paket **${csSelectedPackage}** Anda siap digunakan.`,
             timestamp: new Date()
           }]);
-        } else if (latestTx.status === "FAILED") {
-          setCsChatStep("failed");
+        } else if (myTx.status === "FAILED") {
+          setCsAiReason(myTx.ai_reason || null);
+          setCsChatStep("ask_problem");
           setCsChatLogs(prev => [...prev, {
             sender: "bot" as const,
-            text: `❌ Pembayaran Anda **DITOLAK** oleh admin. Silakan hubungi admin untuk informasi lebih lanjut atau lakukan pembayaran ulang.`,
+            text: `❌ **Pembayaran Ditolak**\n\n${myTx.ai_reason ? `📌 Alasan: ${myTx.ai_reason}\n\n` : ""}Silakan unggah ulang bukti pembayaran yang benar melalui CS.`,
             timestamp: new Date()
           }]);
         }
@@ -366,7 +368,7 @@ export default function App() {
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [csChatStep, csEmailAktif, csSelectedPackage]);
+  }, [csChatStep, csEmailAktif, csTransactionId, csSelectedPackage]);
 
   const handleCsSelectPackage = (paket: "BASIC" | "PRO") => {
     setCsSelectedPackage(paket);
@@ -536,6 +538,14 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
             }
           ]);
         }
+      };
+      reader.onerror = () => {
+        setCsChatStep("failed");
+        setCsChatLogs(prev => [...prev, {
+          sender: "bot" as const,
+          text: "Gagal membaca file. Pastikan file tidak rusak dan coba lagi.",
+          timestamp: new Date()
+        }]);
       };
       reader.readAsDataURL(file);
     }

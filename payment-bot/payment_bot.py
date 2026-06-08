@@ -430,7 +430,7 @@ def main():
 
     bot = PaymentVerificationBot()
     result = bot.run_full_verification(notification)
-    print(result.to_json())
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":

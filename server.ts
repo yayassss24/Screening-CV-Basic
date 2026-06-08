@@ -7,6 +7,7 @@ import crypto from "crypto";
 import mammoth from "mammoth";
 import nodemailer from "nodemailer";
 import OpenAI from "openai";
+import { spawn, execFile } from "child_process";
 
 // Firebase Admin SDK (server-side, for persistent Firestore storage on Vercel)
 let firestoreDb: any = null;
@@ -980,6 +981,61 @@ const PAKET_PRICES: Record<string, number> = {
   PRO: 100000,
 };
 
+// Call Python Payment Verification Bot as primary method
+async function verifyWithPythonBot(
+  base64: string,
+  orderId: string,
+  expectedAmount: number
+): Promise<{ status: "ACCEPTED" | "REJECTED" | "ESCALATED"; detected_amount?: number; reason?: string; method?: string } | null> {
+  try {
+    const tmpDir = path.join(__dirname, "payment-bot", "tmp");
+    await fs.mkdir(tmpDir, { recursive: true });
+    const imgPath = path.join(tmpDir, `${orderId}.png`);
+    const buffer = Buffer.from(base64, "base64");
+    await fs.writeFile(imgPath, buffer);
+
+    const notification = {
+      order_id: orderId,
+      user_id: "system",
+      order_amount: expectedAmount,
+      image_path: imgPath.replace(/\\/g, "/"),
+    };
+
+    return new Promise((resolve) => {
+      const pyScript = path.join(__dirname, "payment-bot", "payment_bot.py");
+      const inputJson = JSON.stringify(notification);
+      const child = execFile("python", [pyScript], {
+        maxBuffer: 1024 * 1024,
+        timeout: 30000,
+      }, async (err, stdout, stderr) => {
+        await fs.unlink(imgPath).catch(() => {});
+        if (err) {
+          if (stderr) console.warn("[PYTHON BOT] stderr:", stderr);
+          resolve(null);
+          return;
+        }
+        try {
+          const result = JSON.parse(stdout.trim());
+          resolve({
+            status: result.status,
+            detected_amount: result.detected_amount,
+            reason: result.reason,
+            method: result.method,
+          });
+        } catch {
+          resolve(null);
+        }
+      });
+      if (child.stdin) {
+        child.stdin.write(inputJson);
+        child.stdin.end();
+      }
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function verifyPaymentScreenshot(
   base64: string,
   paket: string,
@@ -1088,10 +1144,33 @@ app.post("/api/billing/create-transaction", async (req, res) => {
     dbData.transactions.push(newTx);
     await saveDatabase(dbData);
 
-    // Auto-verify payment with Tesseract.js OCR
+    // Auto-verify payment: Python Bot (barcode/QR/OCR) -> fallback Tesseract.js OCR
     if (screenshotBase64) {
       try {
-        const errorMsg = await verifyPaymentScreenshot(screenshotBase64, paket, dbData);
+        // 1. Try Python bot first
+        const pyResult = await verifyWithPythonBot(screenshotBase64, transactionId, nominal);
+        let errorMsg: string | null = null;
+        let verifyMethod = "TESSERACT_JS";
+
+        if (pyResult) {
+          verifyMethod = `PYTHON_BOT_${pyResult.method || "UNKNOWN"}`;
+
+          if (pyResult.status === "ACCEPTED") {
+            errorMsg = null; // success
+          } else if (pyResult.status === "REJECTED") {
+            errorMsg = pyResult.reason || "Nominal pembayaran tidak sesuai.";
+          } else {
+            // ESCALATED — fallback to Tesseract.js
+            console.log(`[PYTHON BOT] Eskalasi: ${pyResult.reason}, fallback ke OCR...`);
+            errorMsg = await verifyPaymentScreenshot(screenshotBase64, paket, dbData);
+            verifyMethod = "TESSERACT_JS_FALLBACK";
+          }
+        } else {
+          // Python bot not available, fallback to Tesseract.js
+          errorMsg = await verifyPaymentScreenshot(screenshotBase64, paket, dbData);
+          verifyMethod = "TESSERACT_JS";
+        }
+
         newTx.verified_at = new Date().toISOString();
 
         if (errorMsg === null) {
@@ -1128,14 +1207,14 @@ app.post("/api/billing/create-transaction", async (req, res) => {
 
           console.log(`
 ======================================================================
-[PAYMENT BOT - PEMBAYARAN DITERIMA]
+[PAYMENT BOT - PEMBAYARAN DITERIMA | ${verifyMethod}]
 Ke Tujuan   : ${newTx.email}
 Subjek      : Kode Aktivasi JagoCV AI — Paket ${newTx.paket}
 Isi Pesan   :
 ----------------------------------------------------------------------
 Halo ${newTx.email.split("@")[0]},
 
-Terima kasih! Pembayaran Anda telah terverifikasi otomatis oleh OCR.
+Terima kasih! Pembayaran Anda telah terverifikasi otomatis oleh Payment Bot.
 
 Paket: ${newTx.paket}
 Kode Aktivasi: ${activationCode}
@@ -1149,11 +1228,11 @@ Kode Aktivasi: ${activationCode}
           newTx.verification_message = errorMsg;
         }
       } catch (err: any) {
-        // ⚠️ OCR gagal — PENDING, eskalasi ke admin
+        // ⚠️ Semua metode gagal — PENDING, eskalasi ke admin
         newTx.status = "PENDING VERIFIKASI MANUAL";
         newTx.ai_recommendation = "PENDING";
         newTx.verification_message = "Gagal membaca bukti pembayaran. Silakan kirim ulang dengan gambar yang lebih jelas.";
-        console.error("[PAYMENT BOT] OCR Gagal:", err?.message || err);
+        console.error("[PAYMENT BOT] Semua metode gagal:", err?.message || err);
       }
 
       await saveDatabase(dbData);

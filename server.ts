@@ -158,7 +158,7 @@ interface JagoTransaction {
   screenshotBase64?: string;
   screenshotMimeType?: string;
   manualClaimDetails?: any;
-  ai_recommendation?: "APPROVED" | "REJECTED" | "PENDING";
+  ai_recommendation?: "ACCEPTED" | "REJECTED" | "PENDING";
   ai_confidence?: number;
   ai_reason?: string | null;
   userProblemDescription?: string;
@@ -341,17 +341,6 @@ const ai = new GoogleGenAI({
   },
 });
 
-// Separate Gemini client for auto payment verification (uses its own API key)
-const paymentAiApiKey = process.env.GEMINI_API_KEY_PAYMENT || process.env.GEMINI_API_KEY;
-const paymentAi = new GoogleGenAI({
-  apiKey: paymentAiApiKey,
-  httpOptions: {
-    headers: {
-      "User-Agent": "aistudio-build",
-    },
-  },
-});
-
 // Call Gemini API with automatic exponential backoff retry and model fallback robustness
 async function callGeminiWithRetry(params: {
   contents: any;
@@ -522,56 +511,6 @@ async function callAIWithFallback(promptText: string, systemInstruction: string,
   }
 
   throw new Error("Semua provider AI (Gemini, Groq, OpenRouter) gagal.");
-}
-
-// Multimodal fallback for payment audit (Gemini → OpenRouter vision)
-async function callAuditWithFallback(prompt: string, base64: string, mimeType: string): Promise<{ text: string } | null> {
-  // 1. Try Gemini first
-  try {
-    const resp = await callGeminiWithRetry({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: prompt },
-            { inlineData: { mimeType, data: base64 } },
-          ],
-        },
-      ],
-      config: { responseMimeType: "application/json" },
-    });
-    if (resp?.text) return { text: resp.text };
-  } catch (e: any) {
-    console.warn("[AUDIT FALLBACK] Gemini gagal:", e?.message?.slice(0, 100));
-  }
-
-  // 2. Try OpenRouter with a vision model
-  const or = getORClient();
-  if (or) {
-    try {
-      console.log("[AUDIT FALLBACK] Mencoba OpenRouter vision...");
-      const dataUrl = `data:${mimeType};base64,${base64}`;
-      const resp = await or.chat.completions.create({
-        model: "google/gemini-2.0-flash-001",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: prompt },
-              { type: "image_url", image_url: { url: dataUrl } },
-            ],
-          },
-        ],
-        response_format: { type: "json_object" },
-      });
-      const text = resp.choices?.[0]?.message?.content || "";
-      if (text) return { text };
-    } catch (e: any) {
-      console.warn("[AUDIT FALLBACK] OpenRouter gagal:", e?.message?.slice(0, 100));
-    }
-  }
-
-  return null; // Both failed — caller handles it gracefully
 }
 
 // API endpoint to retrieve or create current user profile
@@ -1034,64 +973,6 @@ const PAKET_PRICES: Record<string, number> = {
   PRO: 100000,
 };
 
-async function autoVerifyPaymentWithGemini(
-  screenshotBase64: string,
-  expectedAmount: number,
-  mimeType: string
-): Promise<{
-  recommendation: "APPROVED" | "REJECTED" | "PENDING";
-  amount: number | null;
-  confidence: number;
-  reason?: string;
-} | null> {
-  try {
-    const prompt = `Baca bukti transfer.
-
-Nominal yang diharapkan: Rp ${expectedAmount.toLocaleString("id-ID")}
-
-Kembalikan JSON saja:
-
-{
-"recommendation":"APPROVED|REJECTED|PENDING",
-"amount":number|null,
-"confidence":number,
-"reason":"string (hanya diisi jika PENDING, jelaskan masalahnya dalam Bahasa Indonesia)"
-}
-
-Aturan:
-* APPROVED jika nominal sesuai dan transfer berhasil.
-* REJECTED jika nominal berbeda.
-* PENDING jika gambar buram, terpotong, tidak terbaca, nominal tidak ditemukan, atau data tidak cukup.
-* reason wajib diisi jika PENDING, contoh: "Nominal tidak sesuai dengan harga paket", "Gambar buram tidak terbaca", "QRIS belum dibayar", "Struk tidak menunjukkan transaksi sukses".`;
-
-    const response = await paymentAi.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: prompt },
-            { inlineData: { mimeType, data: screenshotBase64 } },
-          ],
-        },
-      ],
-      config: { responseMimeType: "application/json" },
-    });
-
-    if (response?.text) {
-      let text = response.text.trim();
-      if (text.startsWith("```")) {
-        text = text.replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
-      }
-      return JSON.parse(text);
-    }
-    return null;
-  } catch (err: any) {
-    console.error("[AUTO VERIFY GEMINI] Error:", err?.message || err);
-    return null;
-  }
-}
-
 async function verifyPaymentScreenshot(
   base64: string,
   paket: string,
@@ -1200,92 +1081,91 @@ app.post("/api/billing/create-transaction", async (req, res) => {
     dbData.transactions.push(newTx);
     await saveDatabase(dbData);
 
-    // Auto-verify payment with Gemini Vision if screenshot provided
-    if ((status === "PENDING" || status === "PENDING VERIFIKASI MANUAL") && screenshotBase64) {
+    // Auto-verify payment with Tesseract.js OCR
+    if (screenshotBase64) {
       try {
-        const mimeType = screenshotMimeType || "image/png";
-        const result = await autoVerifyPaymentWithGemini(screenshotBase64, nominal, mimeType);
+        const errorMsg = await verifyPaymentScreenshot(screenshotBase64, paket, dbData);
+        newTx.verified_at = new Date().toISOString();
 
-        if (result) {
-          newTx.ai_recommendation = result.recommendation;
-          newTx.ai_confidence = result.confidence;
-          newTx.verified_at = new Date().toISOString();
+        if (errorMsg === null) {
+          // ✅ Nominal SESUAI — ACCEPTED
+          newTx.status = "PAID";
+          newTx.ai_recommendation = "ACCEPTED";
+          newTx.screenshotHash = crypto.createHash("md5").update(Buffer.from(screenshotBase64, "base64")).digest("hex");
 
-          if (result.recommendation === "APPROVED" && result.confidence >= 0.95) {
-            newTx.status = "PAID";
+          // Generate activation code
+          const chars = "0123456789";
+          const genPart = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+          const activationCode = `JCV-${newTx.paket}-${genPart()}-${genPart()}`;
+          const hash = crypto.createHash("sha256").update(activationCode).digest("hex");
 
-            // Generate activation code
-            const chars = "0123456789";
-            const genPart = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-            const activationCode = `JCV-${newTx.paket}-${genPart()}-${genPart()}`;
-            const hash = crypto.createHash("sha256").update(activationCode).digest("hex");
+          const expiresAt = new Date();
+          expiresAt.setHours(expiresAt.getHours() + 48);
 
-            const expiresAt = new Date();
-            expiresAt.setHours(expiresAt.getHours() + 48);
+          const expireSub = new Date();
+          expireSub.setDate(expireSub.getDate() + 30);
 
-            const expireSub = new Date();
-            expireSub.setDate(expireSub.getDate() + 30);
+          const newCode: ActivationCode = {
+            hash,
+            kodePlainForDbFileOnly: activationCode,
+            paket: newTx.paket,
+            digunakan: false,
+            emailPenerima: newTx.email,
+            tanggalCadaluwarsa: expireSub.toISOString().split("T")[0],
+            createdAt: new Date().toISOString(),
+            expiresAt: expiresAt.toISOString(),
+          };
 
-            const newCode: ActivationCode = {
-              hash,
-              kodePlainForDbFileOnly: activationCode,
-              paket: newTx.paket,
-              digunakan: false,
-              emailPenerima: newTx.email,
-              tanggalCadaluwarsa: expireSub.toISOString().split("T")[0],
-              createdAt: new Date().toISOString(),
-              expiresAt: expiresAt.toISOString(),
-            };
+          dbData.activation_codes.push(newCode);
+          newTx.codePlainForDb = activationCode;
 
-            dbData.activation_codes.push(newCode);
-            newTx.codePlainForDb = activationCode;
-
-            console.log(`
+          console.log(`
 ======================================================================
-[SMTP MOCK SERVER - EMAIL DIKIRIM (AUTO VERIFY)]
+[PAYMENT BOT - PEMBAYARAN DITERIMA]
 Ke Tujuan   : ${newTx.email}
 Subjek      : Kode Aktivasi JagoCV AI — Paket ${newTx.paket}
 Isi Pesan   :
 ----------------------------------------------------------------------
 Halo ${newTx.email.split("@")[0]},
 
-Terima kasih! Pembayaran Anda telah terverifikasi otomatis oleh AI.
+Terima kasih! Pembayaran Anda telah terverifikasi otomatis oleh OCR.
 
 Paket: ${newTx.paket}
 Kode Aktivasi: ${activationCode}
-
-Silakan masukkan kode tersebut pada halaman aktivasi untuk membuka fitur premium.
-Kode berlaku selama 48 jam sejak email ini dikirim.
 ----------------------------------------------------------------------
-            `);
-          } else if (result.recommendation === "REJECTED" && result.confidence >= 0.95) {
-            newTx.status = "FAILED";
-          } else {
-            newTx.ai_reason = result.reason || null;
-            newTx.verification_message = result.reason
-              ? `AI tidak dapat memverifikasi bukti transfer: ${result.reason}.`
-              : "Verifikasi otomatis gagal karena bukti pembayaran tidak jelas. Silakan kirim ulang bukti pembayaran dengan gambar yang jelas melalui CS.";
-          }
-
-          await saveDatabase(dbData);
+          `);
+        } else {
+          // ❌ Nominal TIDAK SESUAI — REJECTED
+          newTx.status = "FAILED";
+          newTx.ai_recommendation = "REJECTED";
+          newTx.ai_reason = errorMsg;
+          newTx.verification_message = errorMsg;
         }
       } catch (err: any) {
-        console.error("[AUTO VERIFY] Gagal:", err?.message || err);
+        // ⚠️ OCR gagal — PENDING, eskalasi ke admin
+        newTx.status = "PENDING VERIFIKASI MANUAL";
+        newTx.ai_recommendation = "PENDING";
+        newTx.verification_message = "Gagal membaca bukti pembayaran. Silakan kirim ulang dengan gambar yang lebih jelas.";
+        console.error("[PAYMENT BOT] OCR Gagal:", err?.message || err);
       }
+
+      await saveDatabase(dbData);
     }
 
-    // Notify admin via WhatsApp for CS chatbot purchases
+    // Notify admin via WhatsApp with bot decision
     if (source === "cs_chatbot") {
       const adminPhone = process.env.ADMIN_WA || "6281234567890";
       const nominalStr = nominal.toLocaleString("id-ID");
+      const statusIcon = newTx.status === "PAID" ? "✅" : newTx.status === "FAILED" ? "❌" : "⚠️";
       sendWaNotification(adminPhone,
-        `🔔 *Pembayaran Baru JagoCV*\n\n` +
+        `${statusIcon} *Payment Bot JagoCV*\n\n` +
         `📧 Email: ${email.trim().toLowerCase()}\n` +
         `📦 Paket: *${paket}*\n` +
         `💰 Nominal: Rp ${nominalStr}\n` +
         `🆔 ID: ${transactionId}\n` +
-        `📌 Status: ${status}\n\n` +
-        `Cek dashboard admin untuk konfirmasi.`
+        `📌 Status: *${newTx.status}*\n` +
+        (newTx.verification_message ? `📝 Catatan: ${newTx.verification_message}\n` : "") +
+        `🔗 Dashboard: ${process.env.ADMIN_DASHBOARD_URL || "-"}`
       );
     }
 
@@ -1298,7 +1178,6 @@ Kode berlaku selama 48 jam sejak email ini dikirim.
       nominal,
       status: newTx.status,
       ai_recommendation: newTx.ai_recommendation,
-      ai_confidence: newTx.ai_confidence,
       ai_reason: newTx.ai_reason || undefined,
       verification_message: newTx.verification_message,
       needsInput,
@@ -1328,112 +1207,6 @@ app.patch("/api/billing/transactions/:id/user-feedback", async (req, res) => {
     await saveDatabase(dbData);
 
     res.json({ success: true, message: "Masalah tercatat, admin akan memeriksa." });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// 2. Webhook Payment Confirmation from Payment Gateway (Midtrans / Xendit / Duitku)
-app.post("/api/billing/webhook", async (req, res) => {
-  try {
-    const dbData = await initDatabase();
-    const { transactionId, status } = req.body;
-
-    if (!transactionId) {
-      return res.status(400).json({ error: "Transaction ID wajib disediakan." });
-    }
-
-    const txIndex = dbData.transactions.findIndex((t) => t.id === transactionId);
-    if (txIndex === -1) {
-      return res.status(404).json({ error: "Transaksi tidak ditemukan." });
-    }
-
-    const tx = dbData.transactions[txIndex];
-
-    if (status === "SUCCESS") {
-      if (tx.status === "PAID") {
-        return res.json({ success: true, message: "Transaksi ini sudah sukses diproses sebumnya." });
-      }
-
-      tx.status = "PAID";
-
-      // Generate activation code on Server ONLY: JCV-{TIER}-{4 digit random}-{4 digit random}
-      const chars = "0123456789";
-      const genPart = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-      const activationCode = `JCV-${tx.paket}-${genPart()}-${genPart()}`;
-
-      // Save as SHA256 Hash for security
-      const hash = crypto.createHash("sha256").update(activationCode).digest("hex");
-
-      // Calculate expiration: 48 Hours since email is sent
-      const expiresAt = new Date();
-      expiresAt.setHours(expiresAt.getHours() + 48);
-
-      // Subscription default expiry: 30 days once activated
-      const expireSub = new Date();
-      expireSub.setDate(expireSub.getDate() + 30);
-
-      const newCode: ActivationCode = {
-        hash,
-        kodePlainForDbFileOnly: activationCode, // Note: safe inside db.json so developer/tester can access it, but NEVER returned or exposed via APIs to the client
-        paket: tx.paket,
-        digunakan: false,
-        emailPenerima: tx.email,
-        tanggalCadaluwarsa: expireSub.toISOString().split("T")[0],
-        createdAt: new Date().toISOString(),
-        expiresAt: expiresAt.toISOString(),
-      };
-
-      dbData.activation_codes.push(newCode);
-      
-      // Save code in transactions (strictly for testing review support inside db.json file only)
-      tx.codePlainForDb = activationCode;
-
-      await saveDatabase(dbData);
-
-      // 3. Send email to user's registered Google account
-      const identityVerificationLink = `http://localhost:3000/api/billing/verify-identity?txId=${tx.id}`;
-      
-      console.log(`
-======================================================================
-[SMTP MOCK SERVER - EMAIL BERHASIL DIKIRIM]
-Ke Tujuan   : ${tx.email}
-Subjek      : Kode Aktivasi JagoCV AI — Paket ${tx.paket}
-Isi Pesan   :
-----------------------------------------------------------------------
-Halo ${tx.email.split("@")[0]},
-
-Terima kasih atas pembayaran Anda! Langganan Paket ${tx.paket} sukses diaktifkan.
-
-Rincian Lisensi Anda:
-• Kode Aktivasi   : ${activationCode} (Simpan Baik-Baik)
-• Masa input kode : Berlaku 48 Jam (s/d ${expiresAt.toLocaleString()})
-
-Instruksi Aktivasi:
-1. Buka aplikasi JagoCV AI (http://jagocv.ai)
-2. Masukkan kode '${activationCode}' pada kolom 'Aktivasi Kunci Lisensi' di header atas.
-3. Klik tombol 'Aktifkan' untuk meningkatkan level akun secara instan.
-
-MENGALAMI KENDALA / INGIN KIRIM ULANG KODE?
-Sebelum melakukan Kirim Ulang kode via UI, Anda wajib memverifikasi kepemilikan akun Anda dengan mengklik tautan resmi di bawah ini terlebih dahulu:
-  ${identityVerificationLink}
-
-Terima kasih atas kepercayaan Anda menggunakan JagoCV AI.
-----------------------------------------------------------------------
-      `);
-
-      return res.json({
-        success: true,
-        message: "Status transaksi berhasil ditingkatkan ke PAID. Email kode aktivasi resmi dikirim.",
-      });
-    } else {
-      tx.status = status === "FAILED" ? "FAILED" : "PENDING";
-      await saveDatabase(dbData);
-      return res.json({
-        success: true,
-        message: `Status transaksi diupdate ke ${tx.status}.`,
-      });
-    }
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -1618,338 +1391,6 @@ app.get("/api/billing/mock-inbox", (req, res) => {
 });
 app.post("/api/billing/activate-demo", (req, res) => {
   res.status(403).json({ success: false, message: "Akses demo dinonaktifkan." });
-});
-
-// AI Fraud Audit for Payment Screenshots
-// Detects:
-//   1. AI-generated / synthetic images
-//   2. Tampered nominal / edited amount
-//   3. Fake transaction screenshots
-//   4. QRIS / non-payment images
-app.post("/api/billing/audit-payment", async (req, res) => {
-  try {
-    const { screenshotBase64, screenshotMimeType, expectedNominal } = req.body;
-    if (!screenshotBase64) {
-      return res.status(400).json({ success: false, error: "Screenshot wajib disertakan." });
-    }
-
-    const finalMimeType = screenshotMimeType || "image/png";
-    const nominalStr = expectedNominal ? `Rp ${Number(expectedNominal).toLocaleString("id-ID")}` : "tidak disebutkan";
-
-    const prompt = `Anda adalah "JagoCV Payment Forensic Auditor". Analisis screenshot bukti bayar ini:
-
-1. AI GENERATION CHECK: Apakah ini hasil AI? Cari pixel-perfect edges, missing noise, artifacts, inconsistent lighting.
-2. NOMINAL TAMPERING CHECK: Apakah nominal diedit? Cari font mismatch, alignment issues, pixel bleeding.
-3. PAYMENT VALIDATION: Apakah transaksi BERHASIL? Merchant JagoCV? Nominal sesuai ${nominalStr}?
-
-Output JSON:
-{
-  "overall_verdict": "AUTHENTIC"|"SUSPICIOUS"|"FAKE",
-  "ai_generation": { "score": 0-100, "indicators": ["..."], "conclusion": "..." },
-  "nominal_tampering": { "score": 0-100, "indicators": ["..."], "conclusion": "...", "detected_nominal": "..." },
-  "payment_validation": { "is_successful": true/false, "merchant_match": true/false, "nominal_match": true/false },
-  "summary": "..."
-}`;
-
-    const geminiRes = await callAuditWithFallback(prompt, screenshotBase64, finalMimeType);
-
-    if (geminiRes && geminiRes.text) {
-      let textToParse = geminiRes.text.trim();
-      if (textToParse.startsWith("```")) {
-        textToParse = textToParse.replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
-      }
-      const result = JSON.parse(textToParse);
-      return res.json({ success: true, audit: result });
-    }
-
-    // All AI providers failed — return audit_unavailable instead of 500
-    return res.json({ success: true, audit_unavailable: true, audit: {
-      overall_verdict: "UNAVAILABLE",
-      ai_generation: { score: 0, indicators: [], conclusion: "Audit tidak tersedia: semua provider AI gagal." },
-      nominal_tampering: { score: 0, indicators: [], conclusion: "Audit tidak tersedia: semua provider AI gagal." },
-      payment_validation: { is_successful: null, merchant_match: null, nominal_match: null, details: "Audit tidak tersedia karena semua provider AI gagal." },
-      summary: "Sistem audit forensik tidak dapat dijalankan saat ini. Silakan coba lagi nanti."
-    }});
-  } catch (error: any) {
-    const rawMsg = error?.message || (error?.error?.message) || String(error || "");
-    const errMsg = typeof rawMsg === "string" ? rawMsg : JSON.stringify(rawMsg);
-    const isQuotaError = errMsg.toLowerCase().includes("quota") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("429");
-    if (isQuotaError) {
-      console.warn("[AUDIT PAYMENT] Quota AI habis, audit dilewati.");
-      return res.json({ success: true, audit_unavailable: true, audit: {
-        overall_verdict: "UNAVAILABLE",
-        ai_generation: { score: 0, indicators: [], conclusion: "Audit tidak tersedia: quota AI habis." },
-        nominal_tampering: { score: 0, indicators: [], conclusion: "Audit tidak tersedia: quota AI habis." },
-        payment_validation: { is_successful: null, merchant_match: null, nominal_match: null, details: "Audit tidak tersedia karena quota AI habis." },
-        summary: "Sistem audit forensik tidak dapat dijalankan saat ini karena kuota AI telah habis. Silakan coba lagi nanti atau hubungi admin."
-      }});
-    }
-    console.error("[AUDIT PAYMENT ERROR]", errMsg);
-    res.status(500).json({ success: false, error: errMsg });
-  }
-});
-
-// Endpoint Manual Claim Transfer Bank / E-Wallet (MASALAH 6) - with Automated AI Verification using Gemini
-app.post("/api/billing/manual-claim", async (req, res) => {
-  try {
-    const dbData = await initDatabase();
-    const { txId, email, nominal, timeTransfer, bankWallet, refNumber, screenshotBase64, screenshotMimeType } = req.body;
-
-    if (!txId || !email) {
-      return res.status(400).json({ 
-        success: false,
-        status: "failed",
-        package: "none",
-        referral_code_generated: "",
-        error: "ID Transaksi dan Email wajib disertakan.",
-        message: "ID Transaksi dan Email wajib disertakan."
-      });
-    }
-
-    const txIndex = dbData.transactions.findIndex(t => t.id === txId);
-    if (txIndex === -1) {
-      return res.status(404).json({ 
-        success: false,
-        status: "failed",
-        package: "none",
-        referral_code_generated: "",
-        error: "ID Transaksi tidak terdaftar di sistem.",
-        message: "ID Transaksi tidak terdaftar di sistem."
-      });
-    }
-
-    const tx = dbData.transactions[txIndex];
-
-    // AI AUTO VERIFICATION ENGINE IF SCREENSHOT IS ATTACHED
-    let aiVerified = false;
-    let aiStatus = "failed";
-    let aiMessage = "Verifikasi gagal dilakukan secara otomatis oleh AI. Silakan tunggu peninjauan manual dari tim JagoCV.";
-    let aiPackage: "basic" | "trial" | "pro" | "none" = "none";
-    let generatedCodePlain = "";
-    let fraudCheck: any = null;
-
-    if (screenshotBase64) {
-      try {
-        const prompt = `Anda adalah "JagoCV Payment Verification & Referral Engine" – Sistem AI otomatis yang bertugas memverifikasi kelayakan bukti transfer pembayaran QRIS pelanggan, menentukan paket langganan yang dibeli, dan menerbitkan kode referral/aktivasi yang dikirimkan langsung ke email pelanggan.
-
-Alur Kerja Sistem (Workflow):
-1. **Analisis Gambar**: Periksa gambar yang dikirimkan oleh pengguna (bisa berupa struk, resi e-wallet seperti GoPay/OVO/Dana, m-banking, atau gambar acak/barcode QRIS).
-2. **Validasi Status**: Berhasil jika ada indikasi transaksi "BERHASIL", "SUKSES", "SUCCESS", atau "SETTLED".
-3. **Validasi Merchant**: Pastikan nama merchant tujuan mengarah ke "JagoCV" atau "JAGOCV, KONSTRUKSI & LAYANAN UMUM". Any variations like "JagoCV" or "JAGOCV, KONSTRUKSI & LAYANAN UMUM" are valid.
-4. **Klasifikasi Paket**:
-   - Nominal sekitar Rp 75.000 -> Paket BASIC
-   - Nominal sekitar Rp 100.000 -> Paket PRO
-5. **Penanganan Kasus Gagal**: Jika gambar hanya berupa barcode QRIS kosong (belum dibayar), poster promosi, foto selfie, atau struk editan/palsu, tolak transaksi dengan penjelasan sopan dalam Bahasa Indonesia.
-6. **FORENSIK DAN ANTI-FRAUD** — Lakukan audit forensik pada gambar:
-   a. **AI GENERATION CHECK**: Apakah gambar ini buatan AI? Cari pixel-perfect edges, inconsistent lighting, unnatural text rendering, missing natural noise, artifacts.
-   b. **NOMINAL TAMPERING CHECK**: Apakah nominal diedit? Cari font mismatch, alignment issues, color discrepancy, shadow inconsistency, pixel bleeding di sekitar angka.
-   c. **REPLAY ATTACK CHECK**: Apakah screenshot terlihat seperti foto ulang dari layar lain (foto layar dari HP lain)?
-
-Format Output (wajib JSON murni tanpa pembungkus seperti \`\`\`json):
-{
-  "status": "success" or "failed",
-  "package": "basic" or "pro" or "none",
-  "referral_code_generated": "JCV-XXXX-XXXX-XXXX" (hanya dibuat jika status success, gunakan huruf kapital acak & angka dengan pola JCV-[BASIC|PRO][A-Z0-9]{0,2}-[0-9A-Z]{4}-[0-9A-Z]{4}),
-  "message": "Pesan rincian sukses beserta konfirmasi pengiriman kode ke email pembeli, atau alasan penolakan secara mendetail jika gagal.",
-  "fraud_check": {
-    "ai_generated": "YES" / "NO" / "SUSPICIOUS",
-    "nominal_tampered": "YES" / "NO" / "SUSPICIOUS",
-    "details": "Penjelasan singkat hasil cek forensik dalam Bahasa Indonesia"
-  }
-}
-
-Contoh Respon Keberhasilan (Success):
-{
-  "status": "success",
-  "package": "pro",
-  "referral_code_generated": "JCV-PRO4-9021-1182",
-  "message": "✓ Verifikasi Pembayaran Sukses! Kami telah memvalidasi transfer Anda untuk Paket PRO. Kode Aktivasi Anda adalah JCV-PRO4-9021-1182 dan telah otomatis dikirimkan ke email Anda. Silakan masukkan kode tersebut di kolom aktivasi untuk langsung menikmati fitur premium JagoCV.",
-  "fraud_check": {
-    "ai_generated": "NO",
-    "nominal_tampered": "NO",
-    "details": "Gambar terlihat asli, tidak ada indikasi rekayasa AI atau edit nominal."
-  }
-}
-
-Contoh Respon Penolakan (Failed):
-{
-  "status": "failed",
-  "package": "none",
-  "referral_code_generated": "",
-  "message": "⚠ Verifikasi Gagal: Gambar yang Anda unggah merupakan kode barcode pembayaran QRIS, bukan bukti transaksi sukses transfer. Silakan lakukan pembayaran terlebih dahulu menggunakan aplikasi e-wallet atau perbankan Anda, kemudian unggah screenshot struk bukti transaksi berhasil agar sistem kami dapat memproses kode aktivasi Anda secara otomatis.",
-  "fraud_check": {
-    "ai_generated": "NO",
-    "nominal_tampered": "NO",
-    "details": "Gambar adalah kode QRIS, bukan bukti transfer."
-  }
-}`;
-
-        const finalMimeType = screenshotMimeType || "image/png";
-
-        const geminiRes = await callGeminiWithRetry({
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { text: prompt },
-                {
-                  inlineData: {
-                    mimeType: finalMimeType,
-                    data: screenshotBase64,
-                  },
-                },
-              ],
-            },
-          ],
-          config: {
-            responseMimeType: "application/json",
-          }
-        });
-
-        if (geminiRes && geminiRes.text) {
-          let textToParse = geminiRes.text.trim();
-          
-          // Clean up any markdown code block wraps if returned
-          if (textToParse.startsWith("```")) {
-            textToParse = textToParse.replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
-          }
-          
-          const parsed = JSON.parse(textToParse);
-          aiStatus = parsed.status === "success" ? "success" : "failed";
-          aiPackage = parsed.package || "";
-          aiMessage = parsed.message || "";
-          generatedCodePlain = parsed.referral_code_generated || "";
-          fraudCheck = parsed.fraud_check || null;
-          if (fraudCheck.ai_generated || fraudCheck.nominal_tampered) {
-            console.log("[FRAUD CHECK]", JSON.stringify(fraudCheck));
-          }
-
-          const normalizedPkg = String(aiPackage).toLowerCase();
-          if (aiStatus === "success" && (normalizedPkg === "basic" || normalizedPkg === "pro")) {
-            aiVerified = true;
-          }
-        }
-      } catch (err: any) {
-        console.error("Gagal melakukan otomatisasi pembayaran JagoCV via AI:", err);
-        aiMessage = `Kendala konektivitas AI saat membaca struk: ${err.message}. Admin kami akan segera memeriksa struk Anda secara manual.`;
-      }
-    }
-
-    if (aiVerified) {
-      // Auto upgrade and complete transaction
-      const finalPkg = String(aiPackage).toUpperCase() === "PRO" ? "PRO" : "BASIC";
-      tx.paket = finalPkg;
-      tx.status = "PAID";
-      tx.manualClaimDetails = {
-        nominal: Number(nominal) || tx.nominal,
-        timeTransfer: timeTransfer || new Date().toISOString(),
-        bankWallet: bankWallet || "Auto AI Verified",
-        refNumber: refNumber || `REF-AUTO-${Date.now()}`,
-        screenshotPresent: true,
-        aiVerified: true,
-        aiLog: aiMessage,
-        fraudCheck: fraudCheck || null,
-      };
-
-      // Ensure code is in a valid format or construct on server
-      const chars = "0123456789";
-      const genPart = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-      const activationCode = (generatedCodePlain && generatedCodePlain.trim() && generatedCodePlain.startsWith("JCV-"))
-        ? generatedCodePlain.trim().toUpperCase()
-        : `JCV-${finalPkg}-${genPart()}-${genPart()}`;
-
-      generatedCodePlain = activationCode;
-
-      // Save as SHA256 Hash for security
-      const hash = crypto.createHash("sha256").update(activationCode).digest("hex");
-
-      // Calculate expiration: 48 Hours since email is sent
-      const expiresAt = new Date();
-      expiresAt.setHours(expiresAt.getHours() + 48);
-
-      // Subscription default expiry: 30 days once activated
-      const expireSub = new Date();
-      expireSub.setDate(expireSub.getDate() + 30);
-
-      const newCode: ActivationCode = {
-        hash,
-        kodePlainForDbFileOnly: activationCode,
-        paket: finalPkg,
-        digunakan: false,
-        emailPenerima: tx.email,
-        tanggalCadaluwarsa: expireSub.toISOString().split("T")[0],
-        createdAt: new Date().toISOString(),
-        expiresAt: expiresAt.toISOString(),
-      };
-
-      dbData.activation_codes.push(newCode);
-      tx.codePlainForDb = activationCode;
-
-      await saveDatabase(dbData);
-
-      // Send email mock logging
-      console.log(`
-======================================================================
-[SMTP MOCK SERVER - EMAIL PEMBAYARAN DIKIRIM (AI AUTO)]
-Ke Tujuan   : ${tx.email}
-Subjek      : Aktivasi JagoCV Berhasil
-Isi Pesan   :
-----------------------------------------------------------------------
-Terima kasih telah melakukan pembayaran.
-
-Paket: ${tx.paket}
-Kode Aktivasi: ${activationCode}
-
-Silakan masukkan kode tersebut pada halaman aktivasi untuk membuka fitur premium.
-----------------------------------------------------------------------
-      `);
-
-      return res.json({
-        success: true,
-        status: "success",
-        package: finalPkg.toLowerCase(),
-        referral_code_generated: activationCode,
-        message: aiMessage || `✓ BERHASIL TERVERIFIKASI OTOMATIS OLEH AI!\n\nKode Aktivasi JagoCV Anda telah dibuat dan dikirim ke alamat email resmi Anda: ${tx.email}`
-      });
-    } else {
-      // Save claim as review-needed
-      tx.status = "PENDING VERIFIKASI MANUAL";
-      tx.manualClaimDetails = {
-        nominal: Number(nominal) || tx.nominal,
-        timeTransfer: timeTransfer || new Date().toISOString(),
-        bankWallet: bankWallet || "Manual Submission",
-        refNumber: refNumber || "N/A",
-        screenshotPresent: !!screenshotBase64,
-        aiVerified: false,
-        aiLog: aiMessage,
-        fraudCheck: fraudCheck || null,
-      };
-
-      await saveDatabase(dbData);
-
-      // Return informative error response indicating the AI detected non-receipt image
-      const displayRejectionMsg = aiStatus === "failed" 
-        ? `⚠ VERIFIKASI AI DITOLAK:\n${aiMessage}\n\nKlaim Anda disimpan untuk verifikasi manual oleh Admin kami dalam 1x24 jam.`
-        : `Klaim manual berhasil dicatat. Status transaksi diatur ke PENDING VERIFIKASI MANUAL. Taksiran verifikasi maksimal 1x24 jam.`;
-
-      return res.json({
-        success: false,
-        status: "failed",
-        package: "none",
-        referral_code_generated: "",
-        message: aiMessage || displayRejectionMsg
-      });
-    }
-  } catch (error: any) {
-    res.status(500).json({ 
-      success: false,
-      status: "failed",
-      package: "none",
-      referral_code_generated: "",
-      error: error.message,
-      message: `Terjadi kegagalan server: ${error.message}`
-    });
-  }
 });
 
 // 7. Code Activation - Redeem Licence Code with Hash & 48 Hours Timeout checking

@@ -291,16 +291,7 @@ export default function App() {
     status: string;
   } | null>(null);
 
-  // Manual claim submission states (MASALAH 6 - WEBHOOK PEMBAYARAN PENDING)
-  const [activeManualClaimTxId, setActiveManualClaimTxId] = useState<string | null>(null);
-  const [manualClaimNominal, setManualClaimNominal] = useState("");
-  const [manualClaimTime, setManualClaimTime] = useState("");
-  const [manualClaimBank, setManualClaimBank] = useState("");
-  const [manualClaimRef, setManualClaimRef] = useState("");
-  const [manualClaimFile, setManualClaimFile] = useState<string | null>(null);
-  const [manualClaimMime, setManualClaimMime] = useState<string>("image/png");
-  const [manualClaimLoading, setManualClaimLoading] = useState(false);
-  const [manualClaimSuccessMsg, setManualClaimSuccessMsg] = useState<string | null>(null);
+  // Payment bot states
 
   // Quota Warning flags (MASALAH 7)
   const [quotaWarningActive, setQuotaWarningActive] = useState(false);
@@ -468,29 +459,40 @@ export default function App() {
           const transactionId = txData.transactionId;
           setCsTransactionId(transactionId);
 
-          if (txData.needsInput) {
-            const reasonText = txData.ai_reason
-              ? `\n\n📌 **Alasan AI:** ${txData.ai_reason}`
-              : "";
+          if (txData.status === "PAID") {
+            // ✅ Pembayaran diterima — notifikasi sukses
+            setCsChatStep("success");
+            setCsChatLogs(prev => [
+              ...prev,
+              {
+                sender: "bot" as const,
+                text: `✅ **Pembayaran Terverifikasi!**
 
+Terima kasih! Pembayaran Anda telah diverifikasi otomatis oleh OCR dan cocok dengan harga pesanan.
+
+Kode aktivasi telah dikirim ke email Anda. Silakan cek inbox (atau folder spam) untuk mengaktifkan paket **${txData.paket}** Anda.`,
+                timestamp: new Date()
+              }
+            ]);
+          } else if (txData.status === "FAILED") {
+            // ❌ Pembayaran ditolak
+            const reasonText = txData.ai_reason
+              ? `\n\n📌 **Alasan:** ${txData.ai_reason}`
+              : "";
             setCsAiReason(txData.ai_reason || null);
             setCsChatStep("ask_problem");
             setCsChatLogs(prev => [
               ...prev,
               {
                 sender: "bot" as const,
-                text: `⚠️ **Verifikasi AI Tidak Yakin**
+                text: `❌ **Pembayaran Ditolak**${reasonText}
 
-Sistem AI kami tidak dapat memverifikasi bukti transfer Anda dengan cukup yakin.${reasonText}
-
-Silakan jelaskan masalah yang Anda alami saat melakukan pembayaran agar kami dapat membantu:
-
-Contoh: "Saya transfer Rp75.000 tapi pesan Paket PRO" / "Gambar struk saya terpotong" / "Saya sudah bayar tapi status masih pending"`,
+Silakan unggah ulang bukti pembayaran yang benar melalui CS.`,
                 timestamp: new Date()
               }
             ]);
           } else {
-            // 2. Inform user — pending admin verification
+            // ⚠️ OCR gagal — eskalasi ke admin
             setCsChatStep("pending_admin");
             setCsChatLogs(prev => [
               ...prev,
@@ -589,65 +591,6 @@ Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi 
         timestamp: new Date()
       }
     ]);
-  };
-
-  const handleManualClaimSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activeManualClaimTxId) return;
-    try {
-      setManualClaimLoading(true);
-      setErrorMsg(null);
-      setManualClaimSuccessMsg(null);
-      
-      const response = await fetch("/api/billing/manual-claim", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          txId: activeManualClaimTxId,
-          email: currentUser?.email || profile.email,
-          nominal: Number(manualClaimNominal),
-          timeTransfer: manualClaimTime || new Date().toISOString(),
-          bankWallet: manualClaimBank,
-          refNumber: manualClaimRef,
-          screenshotBase64: manualClaimFile,
-          screenshotMimeType: manualClaimMime,
-        }),
-      });
-      
-      const data = await response.json();
-      if (response.ok && data.success) {
-        setManualClaimSuccessMsg(data.message);
-        setManualClaimNominal("");
-        setManualClaimTime("");
-        setManualClaimBank("");
-        setManualClaimRef("");
-        setManualClaimFile(null);
-        await fetchTransactions(); // Refresh transactions list
-        setTimeout(() => {
-          setActiveManualClaimTxId(null);
-          setManualClaimSuccessMsg(null);
-        }, 4500);
-      } else {
-        setErrorMsg(data.error || "Gagal mengirimkan laporan klaim manual Anda.");
-      }
-    } catch (err: any) {
-      setErrorMsg(`Kendala teknis pelaporan klaim manual: ${err.message}`);
-    } finally {
-      setManualClaimLoading(false);
-    }
-  };
-
-  const handleManualScreenshotChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setManualClaimMime(file.type || "image/png");
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(",")[1];
-        setManualClaimFile(base64);
-      };
-      reader.readAsDataURL(file);
-    }
   };
 
   const handleCvUploadError = (err: string) => {
@@ -943,34 +886,6 @@ Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi 
       }
     } catch (err: any) {
       setErrorMsg(`Gagal menginisiasi tagihan: ${err.message}`);
-    }
-  };
-
-  // Webhook completion simulation
-  const handleSimulateWebhookPay = async (transactionId: string) => {
-    try {
-      setErrorMsg(null);
-      setResendStatusMsg(null);
-      const response = await fetch("/api/billing/webhook", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transactionId,
-          status: "SUCCESS"
-        }),
-      });
-      const data = await response.json();
-      if (data.success) {
-        if (activePaymentModal && activePaymentModal.id === transactionId) {
-          setActivePaymentModal(prev => prev ? { ...prev, status: "PAID" } : null);
-        }
-        await fetchTransactions();
-        await fetchProfile(currentUser?.email || profile.email);
-      } else {
-        setErrorMsg(data.error || "Gagal mengeksekusi simulasikan webhook dari gateway.");
-      }
-    } catch (err: any) {
-      setErrorMsg(`Terganggu masalah jaringan webhook: ${err.message}`);
     }
   };
 
@@ -3165,12 +3080,12 @@ Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi 
               {csChatStep === "ask_problem" && (
                 <form onSubmit={handleCsSubmitProblem} className="bg-slate-800 p-3.5 rounded-xl border border-amber-700 space-y-3 animate-fadeIn text-left text-slate-200">
                   <div className="text-amber-400 font-bold text-[9.5px] uppercase tracking-wider block border-b border-amber-900 pb-1.5">
-                    ⚠ Verifikasi AI Tidak Yakin
+                    ⚠ Pembayaran Bermasalah
                   </div>
                   <p className="text-[10px] text-slate-300 leading-normal">
-                    AI kami tidak bisa memverifikasi bukti transfer Anda dengan yakin.
+                    Pembayaran Anda tidak dapat diverifikasi.
                     {csAiReason && (
-                      <span className="block mt-1 text-amber-300 font-semibold">Alasan: {csAiReason}</span>
+                      <span className="block mt-1 text-amber-300 font-semibold">{csAiReason}</span>
                     )}
                   </p>
                   <p className="text-[10px] text-slate-400 leading-normal">

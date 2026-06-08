@@ -29,17 +29,29 @@ async function initFirestore() {
   }
 }
 
+let diagLog: string[] = [];
+function diag(msg: string) { diagLog.push(msg); console.log("[ADMIN-API]", msg); }
+
 async function readAllTransactions(): Promise<any[]> {
+  diagLog = [];
   const db = await initFirestore();
   if (db) {
+    diag("Firestore initialized, reading transactions...");
     try {
       const snap = await db.collection("transactions").get();
       const txns: any[] = [];
       snap.forEach((doc: any) => txns.push({ id: doc.id, ...doc.data() }));
+      diag(`Firestore returned ${txns.length} transactions`);
       return txns;
-    } catch {}
+    } catch (e: any) {
+      diag(`Firestore read error: ${e.message}`);
+    }
+  } else {
+    diag("Firestore not available, falling back to db.json");
   }
   const dbData = readDb();
+  const count = (dbData.transactions || []).length;
+  diag(`db.json fallback: ${count} transactions`);
   return dbData.transactions || [];
 }
 
@@ -99,28 +111,42 @@ export default async function handler(req: any, res: any) {
         hasScreenshot: !!screenshotBase64,
       };
 
-      // Simpan ke Firestore
+      let savedTo = "none";
       const db = await initFirestore();
       if (db) {
+        diag("Attempting to save transaction to Firestore...");
         try {
           await db.collection("transactions").doc(tx.id).set(tx);
+          diag("Transaction saved to Firestore OK");
           if (screenshotBase64) {
-            await db.collection("screenshots").doc(tx.id).set({
-              screenshotBase64,
-              screenshotMimeType: screenshotMimeType || "image/png",
-            });
+            try {
+              await db.collection("screenshots").doc(tx.id).set({
+                screenshotBase64,
+                screenshotMimeType: screenshotMimeType || "image/png",
+              });
+              diag("Screenshot saved to Firestore OK");
+            } catch (ssErr: any) {
+              diag(`Screenshot Firestore error: ${ssErr.message}`);
+            }
           }
+          savedTo = "firestore";
         } catch (fsErr: any) {
-          console.error("[ADMIN-API] Gagal simpan ke Firestore:", fsErr.message);
+          diag(`Firestore write error: ${fsErr.message}`);
+          diag("Falling back to db.json...");
         }
-      } else {
-        // Fallback db.json (read-only di Vercel, possible data loss)
+      }
+      if (savedTo !== "firestore") {
+        diag("Attempting db.json fallback save...");
         try {
           const dbData = readDb();
           dbData.transactions.push({ ...tx, screenshotBase64, screenshotMimeType });
           const { writeFileSync } = await import("fs");
           writeFileSync(DB_PATH, JSON.stringify(dbData, null, 2));
-        } catch {}
+          savedTo = "db.json";
+          diag("Saved to db.json OK");
+        } catch (jsonErr: any) {
+          diag(`db.json write error: ${jsonErr.message}`);
+        }
       }
 
       res.setHeader("Content-Type", "application/json");
@@ -143,6 +169,27 @@ export default async function handler(req: any, res: any) {
         .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       res.setHeader("Content-Type", "application/json");
       res.status(200).end(JSON.stringify({ success: true, transactions: userTx }));
+      return;
+    }
+
+    // GET /api/billing/admin/diag — diagnostic info
+    if (req.method === "GET" && pathname === "/api/billing/admin/diag") {
+      const db = await initFirestore();
+      const saExists = !!process.env.FIREBASE_SERVICE_ACCOUNT;
+      const saLen = (process.env.FIREBASE_SERVICE_ACCOUNT || "").length;
+      const dbJsonExists = existsSync(DB_PATH);
+      const envKeys = Object.keys(process.env).filter(k => !k.toLowerCase().includes("key") && !k.toLowerCase().includes("secret") && !k.toLowerCase().includes("token") && !k.toLowerCase().includes("password"));
+      res.setHeader("Content-Type", "application/json");
+      res.status(200).end(JSON.stringify({
+        firebaseConfigured: saExists,
+        firebaseServiceAccountLength: saLen,
+        firestoreDbReady: !!db,
+        fsInitDone,
+        dbJsonPath: DB_PATH,
+        dbJsonExists,
+        diag: diagLog,
+        envKeys,
+      }));
       return;
     }
 

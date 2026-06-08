@@ -150,7 +150,7 @@ export default async function handler(req: any, res: any) {
       }
 
       res.setHeader("Content-Type", "application/json");
-      res.status(200).end(JSON.stringify({ success: true, transactionId, paket, nominal, status }));
+      res.status(200).end(JSON.stringify({ success: true, transactionId, paket, nominal, status, savedTo, diag: diagLog }));
       return;
     }
 
@@ -178,7 +178,20 @@ export default async function handler(req: any, res: any) {
       const saExists = !!process.env.FIREBASE_SERVICE_ACCOUNT;
       const saLen = (process.env.FIREBASE_SERVICE_ACCOUNT || "").length;
       const dbJsonExists = existsSync(DB_PATH);
-      const envKeys = Object.keys(process.env).filter(k => !k.toLowerCase().includes("key") && !k.toLowerCase().includes("secret") && !k.toLowerCase().includes("token") && !k.toLowerCase().includes("password"));
+      let firestoreGetError: string | null = null;
+      let firestoreSetError: string | null = null;
+      if (db) {
+        try {
+          await db.collection("_diag_test").doc("_test").get();
+        } catch (e: any) {
+          firestoreGetError = e.message;
+        }
+        try {
+          await db.collection("_diag_test").doc("_test").set({ ts: Date.now() });
+        } catch (e: any) {
+          firestoreSetError = e.message;
+        }
+      }
       res.setHeader("Content-Type", "application/json");
       res.status(200).end(JSON.stringify({
         firebaseConfigured: saExists,
@@ -187,8 +200,9 @@ export default async function handler(req: any, res: any) {
         fsInitDone,
         dbJsonPath: DB_PATH,
         dbJsonExists,
+        firestoreGetError,
+        firestoreSetError,
         diag: diagLog,
-        envKeys,
       }));
       return;
     }

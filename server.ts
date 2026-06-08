@@ -158,6 +158,10 @@ interface JagoTransaction {
   screenshotBase64?: string;
   screenshotMimeType?: string;
   manualClaimDetails?: any;
+  ai_recommendation?: "APPROVED" | "REJECTED" | "PENDING";
+  ai_confidence?: number;
+  verification_message?: string;
+  verified_at?: string;
 }
 
 interface SavedAnalysis {
@@ -328,6 +332,17 @@ async function saveDatabase(data: DatabaseStructure) {
 // Initialize Gemini Client
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    headers: {
+      "User-Agent": "aistudio-build",
+    },
+  },
+});
+
+// Separate Gemini client for auto payment verification (uses its own API key)
+const paymentAiApiKey = process.env.GEMINI_API_KEY_PAYMENT || process.env.GEMINI_API_KEY;
+const paymentAi = new GoogleGenAI({
+  apiKey: paymentAiApiKey,
   httpOptions: {
     headers: {
       "User-Agent": "aistudio-build",
@@ -1017,6 +1032,61 @@ const PAKET_PRICES: Record<string, number> = {
   PRO: 100000,
 };
 
+async function autoVerifyPaymentWithGemini(
+  screenshotBase64: string,
+  expectedAmount: number,
+  mimeType: string
+): Promise<{
+  recommendation: "APPROVED" | "REJECTED" | "PENDING";
+  amount: number | null;
+  confidence: number;
+} | null> {
+  try {
+    const prompt = `Baca bukti transfer.
+
+Nominal yang diharapkan: Rp ${expectedAmount.toLocaleString("id-ID")}
+
+Kembalikan JSON saja:
+
+{
+"recommendation":"APPROVED|REJECTED|PENDING",
+"amount":number|null,
+"confidence":number
+}
+
+Aturan:
+* APPROVED jika nominal sesuai dan transfer berhasil.
+* REJECTED jika nominal berbeda.
+* PENDING jika gambar buram, terpotong, tidak terbaca, atau data tidak cukup.`;
+
+    const response = await paymentAi.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType, data: screenshotBase64 } },
+          ],
+        },
+      ],
+      config: { responseMimeType: "application/json" },
+    });
+
+    if (response?.text) {
+      let text = response.text.trim();
+      if (text.startsWith("```")) {
+        text = text.replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
+      }
+      return JSON.parse(text);
+    }
+    return null;
+  } catch (err: any) {
+    console.error("[AUTO VERIFY GEMINI] Error:", err?.message || err);
+    return null;
+  }
+}
+
 async function verifyPaymentScreenshot(
   base64: string,
   paket: string,
@@ -1125,6 +1195,32 @@ app.post("/api/billing/create-transaction", async (req, res) => {
     dbData.transactions.push(newTx);
     await saveDatabase(dbData);
 
+    // Auto-verify payment with Gemini Vision if screenshot provided and status is PENDING
+    if (status === "PENDING" && screenshotBase64) {
+      try {
+        const mimeType = screenshotMimeType || "image/png";
+        const result = await autoVerifyPaymentWithGemini(screenshotBase64, nominal, mimeType);
+
+        if (result) {
+          newTx.ai_recommendation = result.recommendation;
+          newTx.ai_confidence = result.confidence;
+          newTx.verified_at = new Date().toISOString();
+
+          if (result.recommendation === "APPROVED" && result.confidence >= 0.95) {
+            newTx.status = "PAID";
+          } else if (result.recommendation === "REJECTED" && result.confidence >= 0.95) {
+            newTx.status = "FAILED";
+          } else {
+            newTx.verification_message = "Verifikasi otomatis gagal karena bukti pembayaran tidak jelas. Silakan kirim ulang bukti pembayaran dengan gambar yang jelas melalui CS.";
+          }
+
+          await saveDatabase(dbData);
+        }
+      } catch (err: any) {
+        console.error("[AUTO VERIFY] Gagal:", err?.message || err);
+      }
+    }
+
     // Notify admin via WhatsApp for CS chatbot purchases
     if (source === "cs_chatbot") {
       const adminPhone = process.env.ADMIN_WA || "6281234567890";
@@ -1145,7 +1241,10 @@ app.post("/api/billing/create-transaction", async (req, res) => {
       transactionId,
       paket,
       nominal,
-      status,
+      status: newTx.status,
+      ai_recommendation: newTx.ai_recommendation,
+      ai_confidence: newTx.ai_confidence,
+      verification_message: newTx.verification_message,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

@@ -65,6 +65,7 @@ async function readAllTransactions(): Promise<any[]> {
 }
 
 async function saveTransactionToAll(tx: any, screenshotBase64?: string, screenshotMimeType?: string) {
+  let savedTo = "file";
   const db = await initFirestore();
   if (db) {
     try {
@@ -72,17 +73,17 @@ async function saveTransactionToAll(tx: any, screenshotBase64?: string, screensh
       if (screenshotBase64) {
         await db.collection("screenshots").doc(tx.id).set({ screenshotBase64, screenshotMimeType: screenshotMimeType || "image/png" });
       }
-      return "firestore";
+      savedTo = "firestore";
     } catch (e: any) {
       console.log("[ADMIN-API] Firestore write error:", e.message);
     }
   }
-  // Fallback: in-memory + /tmp/transactions.json
+  // Always save to file fallback too (admin may read from /tmp when Firestore read quota exceeded)
   const all = loadFileTransactions();
   all.push(tx);
   saveFileTransactions(all);
   memTransactions = all;
-  return "file";
+  return savedTo;
 }
 
 async function readTransaction(id: string): Promise<any | null> {
@@ -91,7 +92,6 @@ async function readTransaction(id: string): Promise<any | null> {
 }
 
 async function updateTransactionInAll(id: string, updates: Record<string, any>) {
-  // Update Firestore
   const db = await initFirestore();
   if (db) {
     try {
@@ -100,14 +100,18 @@ async function updateTransactionInAll(id: string, updates: Record<string, any>) 
       console.log("[ADMIN-API] Firestore update error:", e.message);
     }
   }
-  // Update file + in-memory
+  // Always update file + in-memory too
   const all = loadFileTransactions();
   const idx = all.findIndex((t: any) => t.id === id);
-  if (idx !== -1) {
+  if (idx === -1) {
+    // Not in file cache yet; try to rebuild from Firestore (if available) or seed from db.json
+    const initialTx = await readTransaction(id);
+    if (initialTx) { all.push({ ...initialTx, ...updates }); }
+  } else {
     all[idx] = { ...all[idx], ...updates };
-    saveFileTransactions(all);
-    memTransactions = all;
   }
+  saveFileTransactions(all);
+  memTransactions = all;
 }
 
 function readBody(req: any): Promise<string> {

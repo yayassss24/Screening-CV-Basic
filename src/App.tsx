@@ -325,7 +325,10 @@ export default function App() {
   const [csScreenshotBase64, setCsScreenshotBase64] = useState<string | null>(null);
   const [csScreenshotMime, setCsScreenshotMime] = useState("image/png");
   const [csScreenshotName, setCsScreenshotName] = useState("");
-  const [csChatStep, setCsChatStep] = useState<"welcome" | "input_details" | "waiting_payment" | "verifying" | "pending_admin" | "success" | "failed">("welcome");
+  const [csTransactionId, setCsTransactionId] = useState<string | null>(null);
+  const [csAiReason, setCsAiReason] = useState<string | null>(null);
+  const [csProblemMessage, setCsProblemMessage] = useState("");
+  const [csChatStep, setCsChatStep] = useState<"welcome" | "input_details" | "waiting_payment" | "verifying" | "ask_problem" | "pending_admin" | "success" | "failed">("welcome");
   const [csChatLogs, setCsChatLogs] = useState<Array<{ sender: "user" | "bot"; text: string; image?: string; timestamp: Date }>>([
     {
       sender: "bot" as const,
@@ -463,14 +466,37 @@ export default function App() {
           }
 
           const transactionId = txData.transactionId;
+          setCsTransactionId(transactionId);
 
-          // 2. Inform user — pending admin verification
-          setCsChatStep("pending_admin");
-          setCsChatLogs(prev => [
-            ...prev,
-            {
-              sender: "bot" as const,
-              text: `✅ Bukti transfer berhasil diupload!
+          if (txData.needsInput) {
+            const reasonText = txData.ai_reason
+              ? `\n\n📌 **Alasan AI:** ${txData.ai_reason}`
+              : "";
+
+            setCsAiReason(txData.ai_reason || null);
+            setCsChatStep("ask_problem");
+            setCsChatLogs(prev => [
+              ...prev,
+              {
+                sender: "bot" as const,
+                text: `⚠️ **Verifikasi AI Tidak Yakin**
+
+Sistem AI kami tidak dapat memverifikasi bukti transfer Anda dengan cukup yakin.${reasonText}
+
+Silakan jelaskan masalah yang Anda alami saat melakukan pembayaran agar kami dapat membantu:
+
+Contoh: "Saya transfer Rp75.000 tapi pesan Paket PRO" / "Gambar struk saya terpotong" / "Saya sudah bayar tapi status masih pending"`,
+                timestamp: new Date()
+              }
+            ]);
+          } else {
+            // 2. Inform user — pending admin verification
+            setCsChatStep("pending_admin");
+            setCsChatLogs(prev => [
+              ...prev,
+              {
+                sender: "bot" as const,
+                text: `✅ Bukti transfer berhasil diupload!
 
 📋 ID Transaksi: ${transactionId}
 
@@ -480,14 +506,15 @@ Pembayaran Anda sedang diperiksa oleh tim admin. Silakan tunggu konfirmasi.
 Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi setelah dikonfirmasi.
 
 Jika ada pertanyaan, hubungi admin via WhatsApp.`,
-              timestamp: new Date()
-            },
-            {
-              sender: "bot" as const,
-              text: `💡 Tips: Simpan ID Transaksi di atas untuk memudahkan komunikasi dengan admin.`,
-              timestamp: new Date()
-            }
-          ]);
+                timestamp: new Date()
+              },
+              {
+                sender: "bot" as const,
+                text: `💡 Tips: Simpan ID Transaksi di atas untuk memudahkan komunikasi dengan admin.`,
+                timestamp: new Date()
+              }
+            ]);
+          }
           await fetchTransactions();
         } catch (err: any) {
           console.error("Gagal melakukan otomatisasi pembayaran JagoCV via CS Bot:", err);
@@ -506,11 +533,53 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
     }
   };
 
+  const handleCsSubmitProblem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!csProblemMessage.trim() || !csTransactionId) return;
+
+    try {
+      const res = await fetch(`/api/billing/transactions/${csTransactionId}/user-feedback`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ problemDescription: csProblemMessage.trim() }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+    } catch (err: any) {
+      console.error("Gagal menyimpan masalah:", err);
+    }
+
+    setCsChatLogs(prev => [
+      ...prev,
+      {
+        sender: "user" as const,
+        text: `📝 Masalah: ${csProblemMessage.trim()}`,
+        timestamp: new Date()
+      },
+      {
+        sender: "bot" as const,
+        text: `Terima kasih! Masalah Anda telah dicatat. Admin kami akan memeriksa bukti transfer dan keterangan Anda.
+
+⏳ Status: **MENUNGGU VERIFIKASI ADMIN**
+📋 ID Transaksi: ${csTransactionId}
+
+Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi setelah dikonfirmasi.`,
+        timestamp: new Date()
+      }
+    ]);
+    setCsProblemMessage("");
+    setCsChatStep("pending_admin");
+    await fetchTransactions();
+  };
+
   const handleCsResetChat = () => {
     setCsNamaLengkap("");
     setCsSelectedPackage(null);
     setCsScreenshotBase64(null);
     setCsScreenshotName("");
+    setCsTransactionId(null);
+    setCsAiReason(null);
+    setCsProblemMessage("");
     setLastActivationCode("");
     setCsChatStep("welcome");
     setCsChatLogs([
@@ -3091,6 +3160,37 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
                   <RefreshCw className="w-5 h-5 mx-auto animate-spin mb-1 text-indigo-400" />
                   <p className="text-[10.5px]">Sistem AI JagoCV sedang mengaudit lembaran struk Anda secara server-side...</p>
                 </div>
+              )}
+
+              {csChatStep === "ask_problem" && (
+                <form onSubmit={handleCsSubmitProblem} className="bg-slate-800 p-3.5 rounded-xl border border-amber-700 space-y-3 animate-fadeIn text-left text-slate-200">
+                  <div className="text-amber-400 font-bold text-[9.5px] uppercase tracking-wider block border-b border-amber-900 pb-1.5">
+                    ⚠ Verifikasi AI Tidak Yakin
+                  </div>
+                  <p className="text-[10px] text-slate-300 leading-normal">
+                    AI kami tidak bisa memverifikasi bukti transfer Anda dengan yakin.
+                    {csAiReason && (
+                      <span className="block mt-1 text-amber-300 font-semibold">Alasan: {csAiReason}</span>
+                    )}
+                  </p>
+                  <p className="text-[10px] text-slate-400 leading-normal">
+                    Jelaskan masalah yang Anda alami saat melakukan pembayaran:
+                  </p>
+                  <textarea
+                    required
+                    value={csProblemMessage}
+                    onChange={(e) => setCsProblemMessage(e.target.value)}
+                    rows={3}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:border-amber-500 transition-colors text-[10.5px] resize-none"
+                    placeholder="Contoh: Saya transfer Rp75.000 tapi pesan Paket PRO / Gambar struk terpotong / Saya sudah bayar tapi status masih pending"
+                  />
+                  <button
+                    type="submit"
+                    className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white font-extrabold py-2 px-4 rounded-lg transition-all shadow-md cursor-pointer hover:shadow-lg active:scale-[0.98] text-[10.5px]"
+                  >
+                    Kirim Penjelasan → Verifikasi Admin
+                  </button>
+                </form>
               )}
 
               {csChatStep === "pending_admin" && (

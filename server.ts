@@ -160,6 +160,8 @@ interface JagoTransaction {
   manualClaimDetails?: any;
   ai_recommendation?: "APPROVED" | "REJECTED" | "PENDING";
   ai_confidence?: number;
+  ai_reason?: string | null;
+  userProblemDescription?: string;
   verification_message?: string;
   verified_at?: string;
 }
@@ -1040,6 +1042,7 @@ async function autoVerifyPaymentWithGemini(
   recommendation: "APPROVED" | "REJECTED" | "PENDING";
   amount: number | null;
   confidence: number;
+  reason?: string;
 } | null> {
   try {
     const prompt = `Baca bukti transfer.
@@ -1051,13 +1054,15 @@ Kembalikan JSON saja:
 {
 "recommendation":"APPROVED|REJECTED|PENDING",
 "amount":number|null,
-"confidence":number
+"confidence":number,
+"reason":"string (hanya diisi jika PENDING, jelaskan masalahnya dalam Bahasa Indonesia)"
 }
 
 Aturan:
 * APPROVED jika nominal sesuai dan transfer berhasil.
 * REJECTED jika nominal berbeda.
-* PENDING jika gambar buram, terpotong, tidak terbaca, atau data tidak cukup.`;
+* PENDING jika gambar buram, terpotong, tidak terbaca, nominal tidak ditemukan, atau data tidak cukup.
+* reason wajib diisi jika PENDING, contoh: "Nominal tidak sesuai dengan harga paket", "Gambar buram tidak terbaca", "QRIS belum dibayar", "Struk tidak menunjukkan transaksi sukses".`;
 
     const response = await paymentAi.models.generateContent({
       model: "gemini-2.0-flash",
@@ -1195,8 +1200,8 @@ app.post("/api/billing/create-transaction", async (req, res) => {
     dbData.transactions.push(newTx);
     await saveDatabase(dbData);
 
-    // Auto-verify payment with Gemini Vision if screenshot provided and status is PENDING
-    if (status === "PENDING" && screenshotBase64) {
+    // Auto-verify payment with Gemini Vision if screenshot provided
+    if ((status === "PENDING" || status === "PENDING VERIFIKASI MANUAL") && screenshotBase64) {
       try {
         const mimeType = screenshotMimeType || "image/png";
         const result = await autoVerifyPaymentWithGemini(screenshotBase64, nominal, mimeType);
@@ -1208,10 +1213,58 @@ app.post("/api/billing/create-transaction", async (req, res) => {
 
           if (result.recommendation === "APPROVED" && result.confidence >= 0.95) {
             newTx.status = "PAID";
+
+            // Generate activation code
+            const chars = "0123456789";
+            const genPart = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+            const activationCode = `JCV-${newTx.paket}-${genPart()}-${genPart()}`;
+            const hash = crypto.createHash("sha256").update(activationCode).digest("hex");
+
+            const expiresAt = new Date();
+            expiresAt.setHours(expiresAt.getHours() + 48);
+
+            const expireSub = new Date();
+            expireSub.setDate(expireSub.getDate() + 30);
+
+            const newCode: ActivationCode = {
+              hash,
+              kodePlainForDbFileOnly: activationCode,
+              paket: newTx.paket,
+              digunakan: false,
+              emailPenerima: newTx.email,
+              tanggalCadaluwarsa: expireSub.toISOString().split("T")[0],
+              createdAt: new Date().toISOString(),
+              expiresAt: expiresAt.toISOString(),
+            };
+
+            dbData.activation_codes.push(newCode);
+            newTx.codePlainForDb = activationCode;
+
+            console.log(`
+======================================================================
+[SMTP MOCK SERVER - EMAIL DIKIRIM (AUTO VERIFY)]
+Ke Tujuan   : ${newTx.email}
+Subjek      : Kode Aktivasi JagoCV AI — Paket ${newTx.paket}
+Isi Pesan   :
+----------------------------------------------------------------------
+Halo ${newTx.email.split("@")[0]},
+
+Terima kasih! Pembayaran Anda telah terverifikasi otomatis oleh AI.
+
+Paket: ${newTx.paket}
+Kode Aktivasi: ${activationCode}
+
+Silakan masukkan kode tersebut pada halaman aktivasi untuk membuka fitur premium.
+Kode berlaku selama 48 jam sejak email ini dikirim.
+----------------------------------------------------------------------
+            `);
           } else if (result.recommendation === "REJECTED" && result.confidence >= 0.95) {
             newTx.status = "FAILED";
           } else {
-            newTx.verification_message = "Verifikasi otomatis gagal karena bukti pembayaran tidak jelas. Silakan kirim ulang bukti pembayaran dengan gambar yang jelas melalui CS.";
+            newTx.ai_reason = result.reason || null;
+            newTx.verification_message = result.reason
+              ? `AI tidak dapat memverifikasi bukti transfer: ${result.reason}.`
+              : "Verifikasi otomatis gagal karena bukti pembayaran tidak jelas. Silakan kirim ulang bukti pembayaran dengan gambar yang jelas melalui CS.";
           }
 
           await saveDatabase(dbData);
@@ -1236,6 +1289,8 @@ app.post("/api/billing/create-transaction", async (req, res) => {
       );
     }
 
+    const needsInput = newTx.status !== "PAID" && newTx.status !== "FAILED" && !!screenshotBase64;
+
     res.json({
       success: true,
       transactionId,
@@ -1244,8 +1299,35 @@ app.post("/api/billing/create-transaction", async (req, res) => {
       status: newTx.status,
       ai_recommendation: newTx.ai_recommendation,
       ai_confidence: newTx.ai_confidence,
+      ai_reason: newTx.ai_reason || undefined,
       verification_message: newTx.verification_message,
+      needsInput,
     });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 1b. User feedback for low-confidence verification
+app.patch("/api/billing/transactions/:id/user-feedback", async (req, res) => {
+  try {
+    const dbData = await initDatabase();
+    const { id } = req.params;
+    const { problemDescription } = req.body;
+
+    if (!problemDescription || !problemDescription.trim()) {
+      return res.status(400).json({ error: "Deskripsi masalah wajib diisi." });
+    }
+
+    const txIndex = dbData.transactions.findIndex((t) => t.id === id);
+    if (txIndex === -1) {
+      return res.status(404).json({ error: "Transaksi tidak ditemukan." });
+    }
+
+    dbData.transactions[txIndex].userProblemDescription = problemDescription.trim();
+    await saveDatabase(dbData);
+
+    res.json({ success: true, message: "Masalah tercatat, admin akan memeriksa." });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

@@ -48,6 +48,15 @@ async function readTransaction(id: string): Promise<any | null> {
   return all.find((t: any) => t.id === id) || null;
 }
 
+function readBody(req: any): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk: any) => (body += chunk));
+    req.on("end", () => resolve(body));
+    req.on("error", reject);
+  });
+}
+
 export default async function handler(req: any, res: any) {
   const url = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
   const pathname = url.pathname;
@@ -62,6 +71,81 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
+    // POST /api/billing/create-transaction — CS Chatbot upload bukti bayar
+    if (req.method === "POST" && pathname === "/api/billing/create-transaction") {
+      const body = JSON.parse(await readBody(req));
+      const { email, paket, source, screenshotBase64, screenshotMimeType } = body;
+
+      if (!email || (paket !== "BASIC" && paket !== "PRO" && paket !== "TRIAL")) {
+        res.setHeader("Content-Type", "application/json");
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: "Email dan paket yang valid (BASIC, PRO, atau TRIAL) wajib disertakan." }));
+        return;
+      }
+
+      const transactionId = `TX-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const nominal = paket === "PRO" ? 100000 : paket === "TRIAL" ? 10000 : 75000;
+      const status = source === "cs_chatbot" ? "PENDING VERIFIKASI MANUAL" : "PENDING";
+
+      const tx = {
+        id: transactionId,
+        email: email.trim().toLowerCase(),
+        paket,
+        nominal,
+        status,
+        createdAt: new Date().toISOString(),
+        resendCount: 0,
+        verifiedIdentity: false,
+        hasScreenshot: !!screenshotBase64,
+      };
+
+      // Simpan ke Firestore
+      const db = await initFirestore();
+      if (db) {
+        try {
+          await db.collection("transactions").doc(tx.id).set(tx);
+          if (screenshotBase64) {
+            await db.collection("screenshots").doc(tx.id).set({
+              screenshotBase64,
+              screenshotMimeType: screenshotMimeType || "image/png",
+            });
+          }
+        } catch (fsErr: any) {
+          console.error("[ADMIN-API] Gagal simpan ke Firestore:", fsErr.message);
+        }
+      } else {
+        // Fallback db.json (read-only di Vercel, possible data loss)
+        try {
+          const dbData = readDb();
+          dbData.transactions.push({ ...tx, screenshotBase64, screenshotMimeType });
+          const { writeFileSync } = await import("fs");
+          writeFileSync(DB_PATH, JSON.stringify(dbData, null, 2));
+        } catch {}
+      }
+
+      res.setHeader("Content-Type", "application/json");
+      res.status(200).end(JSON.stringify({ success: true, transactionId, paket, nominal, status }));
+      return;
+    }
+
+    // GET /api/billing/transactions — polling user transactions (CS chatbot)
+    if (req.method === "GET" && pathname === "/api/billing/transactions") {
+      const email = (url.searchParams.get("email") || "").trim().toLowerCase();
+      if (!email) {
+        res.setHeader("Content-Type", "application/json");
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: "Email wajib" }));
+        return;
+      }
+      const allTx = await readAllTransactions();
+      const userTx = allTx
+        .filter((t: any) => t.email === email)
+        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      res.setHeader("Content-Type", "application/json");
+      res.status(200).end(JSON.stringify({ success: true, transactions: userTx }));
+      return;
+    }
+
     // GET /api/billing/admin/transactions
     if (req.method === "GET" && pathname === "/api/billing/admin/transactions") {
       const allTx = (await readAllTransactions())

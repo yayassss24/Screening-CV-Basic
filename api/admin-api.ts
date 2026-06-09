@@ -71,7 +71,9 @@ async function saveTransactionToAll(tx: any, screenshotBase64?: string, screensh
         has_screenshot: !!screenshotBase64,
         screenshot_base64: screenshotBase64 || null,
         screenshot_mime_type: screenshotMimeType || null,
-      });
+        code_plain_for_db: tx.codePlainForDb || null,
+        verified_at: tx.verified_at || null,
+      } as any);
     } catch {}
   }
   const all = loadFileTransactions();
@@ -89,7 +91,11 @@ async function updateTransactionInAll(id: string, updates: Record<string, any>) 
   const sb = await getSupabaseClient();
   if (sb) {
     try {
-      await sb.from("transactions").update(updates).eq("id", id);
+      const supaUpdates: Record<string, any> = {};
+      if (updates.status !== undefined) supaUpdates.status = updates.status;
+      if (updates.verified_at !== undefined) supaUpdates.verified_at = updates.verified_at;
+      if (updates.codePlainForDb !== undefined) supaUpdates.code_plain_for_db = updates.codePlainForDb;
+      await sb.from("transactions").update(supaUpdates).eq("id", id);
     } catch {}
   }
   const all = loadFileTransactions();

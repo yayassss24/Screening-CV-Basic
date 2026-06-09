@@ -127,11 +127,27 @@ export default async function handler(req: any, res: any) {
 
     // GET /api/billing/admin/diag
     if (req.method === "GET" && pathname === "/api/billing/admin/diag") {
+      const supabaseUrl = (process.env.SUPABASE_URL || "").replace(/\/rest\/v1\/?$/, "");
+      const supabaseKeySet = !!process.env.SUPABASE_ANON_KEY;
+      let supabaseStatus = "not-attempted";
+      try {
+        const mod = await import("@supabase/supabase-js");
+        if (mod && mod.createClient) {
+          const sb = mod.createClient(supabaseUrl, process.env.SUPABASE_ANON_KEY || "");
+          const { data, error } = await sb.from("transactions").select("count(*)", { count: "exact" });
+          supabaseStatus = error ? `supa-error: ${error.message}` : "connected";
+        } else {
+          supabaseStatus = "createClient-not-found";
+        }
+      } catch (e: any) {
+        supabaseStatus = `import-error: ${e.message}`;
+      }
       res.setHeader("Content-Type", "application/json");
       res.status(200).end(JSON.stringify({
         mode: "file-only",
-        supabaseUrl: (process.env.SUPABASE_URL || "").substring(0, 40),
-        supabaseKeySet: !!process.env.SUPABASE_ANON_KEY,
+        supabaseUrl: supabaseUrl.substring(0, 40),
+        supabaseKeySet,
+        supabaseStatus,
         memTransactionsCount: memTransactions?.length || 0,
         tmpTransactionsExists: existsSync(TMP_PATH),
       }));

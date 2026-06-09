@@ -1,5 +1,5 @@
-import { readFileSync, existsSync } from "fs";
-import crypto from "crypto";
+import { readFileSync, existsSync, writeFileSync } from "fs";
+import { createHash } from "crypto";
 import { getSupabase as _getSupabase } from "./supabase";
 const getSupabase = () => _getSupabase();
 
@@ -16,7 +16,6 @@ function loadFileTransactions(): any[] {
 
 function saveFileTransactions(txns: any[]) {
   try {
-    const { writeFileSync } = require("fs");
     writeFileSync(TMP_PATH, JSON.stringify({ transactions: txns }, null, 2), "utf-8");
   } catch {}
 }
@@ -290,7 +289,7 @@ export default async function handler(req: any, res: any) {
       const chars = "0123456789";
       const genPart = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
       const activationCode = `JCV-${tx.paket}-${genPart()}-${genPart()}`;
-      const hash = crypto.createHash("sha256").update(activationCode).digest("hex");
+      const hash = createHash("sha256").update(activationCode).digest("hex");
       const expiresAt = new Date();
       expiresAt.setHours(expiresAt.getHours() + 48);
       const expireSub = new Date();

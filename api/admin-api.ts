@@ -136,7 +136,7 @@ Aturan:
       if (ocrConfidence < 30 && ocrText.length < 20) {
         return { ok: false, reason: "Bukti bayar buram/tidak terbaca — silakan unggah ulang dengan gambar yang lebih jelas." };
       }
-      if (/QRIS|qris/i.test(ocrText)) {
+      if (/QRIS|qris|GRIS|gris|(?<!\w)QR(?!\w)|(?<!\w)GR(?!\w)/i.test(ocrText)) {
         return { ok: false, reason: "Gambar adalah kode QRIS, bukan bukti transfer sukses." };
       }
 

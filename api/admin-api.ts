@@ -440,6 +440,7 @@ export default async function handler(req: any, res: any) {
         supabaseUrl: supabaseUrl.substring(0, 40),
         supabaseKeySet,
         supabaseStatus,
+        geminiKeySet: !!(process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_PAYMENT),
         memTransactionsCount: memTransactions?.length || 0,
         tmpTransactionsExists: existsSync(TMP_PATH),
       }));

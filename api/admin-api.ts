@@ -1,19 +1,15 @@
 import { readFileSync, existsSync } from "fs";
-import { join } from "path";
 import crypto from "crypto";
+import { getSupabase } from "./supabase";
 
-const DB_PATH = join(process.cwd(), "db.json");
-const TMP_PATH = join("/tmp", "transactions.json");
+const TMP_PATH = "/tmp/transactions.json";
 
 // In-memory cache (survives within same serverless instance)
 let memTransactions: any[] | null = null;
-let firestoreDb: any = null;
-let fsInitDone = false;
 
 function loadFileTransactions(): any[] {
-  const p = existsSync(TMP_PATH) ? TMP_PATH : DB_PATH;
-  if (!existsSync(p)) return [];
-  try { return JSON.parse(readFileSync(p, "utf-8")).transactions || []; }
+  if (!existsSync(TMP_PATH)) return [];
+  try { return JSON.parse(readFileSync(TMP_PATH, "utf-8")).transactions || []; }
   catch { return []; }
 }
 
@@ -24,36 +20,36 @@ function saveFileTransactions(txns: any[]) {
   } catch {}
 }
 
-async function initFirestore() {
-  if (fsInitDone) return firestoreDb;
-  const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
-  if (!sa) return null;
-  try {
-    const { initializeApp, getApps, cert } = await import("firebase-admin/app");
-    const { getFirestore } = await import("firebase-admin/firestore");
-    if (!getApps().length) {
-      initializeApp({ credential: cert(JSON.parse(sa)) });
-    }
-    firestoreDb = getFirestore();
-    fsInitDone = true;
-    return firestoreDb;
-  } catch {
-    return null;
-  }
-}
-
 async function readAllTransactions(): Promise<any[]> {
   if (memTransactions) return memTransactions;
-  const db = await initFirestore();
-  if (db) {
+  const sb = getSupabase();
+  if (sb) {
     try {
-      const snap = await db.collection("transactions").get();
-      const txns: any[] = [];
-      snap.forEach((doc: any) => txns.push({ id: doc.id, ...doc.data() }));
-      memTransactions = txns;
-      return memTransactions;
+      const { data, error } = await sb
+        .from("transactions")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (!error && data) {
+        memTransactions = data.map((t: any) => ({
+          id: t.id,
+          email: t.email,
+          paket: t.paket,
+          nominal: t.nominal,
+          status: t.status,
+          createdAt: t.created_at,
+          resendCount: t.resend_count,
+          verifiedIdentity: t.verified_identity,
+          hasScreenshot: t.has_screenshot,
+          screenshotBase64: t.screenshot_base64,
+          screenshotMimeType: t.screenshot_mime_type,
+          codePlainForDb: t.code_plain_for_db,
+          verified_at: t.verified_at,
+          ai_recommendation: t.ai_recommendation,
+        }));
+        return memTransactions;
+      }
     } catch (e: any) {
-      console.log("[ADMIN-API] Firestore read error:", e.message);
+      console.log("[ADMIN-API] Supabase read error:", e.message);
     }
   }
   const fileTx = loadFileTransactions();
@@ -66,19 +62,37 @@ async function readAllTransactions(): Promise<any[]> {
 
 async function saveTransactionToAll(tx: any, screenshotBase64?: string, screenshotMimeType?: string) {
   let savedTo = "file";
-  const db = await initFirestore();
-  if (db) {
+  const sb = getSupabase();
+  if (sb) {
     try {
-      await db.collection("transactions").doc(tx.id).set(tx);
-      if (screenshotBase64) {
-        await db.collection("screenshots").doc(tx.id).set({ screenshotBase64, screenshotMimeType: screenshotMimeType || "image/png" });
+      const { error } = await sb.from("transactions").insert({
+        id: tx.id,
+        email: tx.email,
+        paket: tx.paket,
+        nominal: tx.nominal,
+        status: tx.status,
+        created_at: tx.createdAt,
+        resend_count: tx.resendCount || 0,
+        verified_identity: tx.verifiedIdentity || false,
+        has_screenshot: !!screenshotBase64,
+        screenshot_base64: screenshotBase64 || null,
+        screenshot_mime_type: screenshotMimeType || null,
+      });
+      if (!error) {
+        savedTo = "supabase";
+        if (screenshotBase64) {
+          await sb.from("screenshots").insert({
+            transaction_id: tx.id,
+            base64: screenshotBase64,
+            mime_type: screenshotMimeType || "image/png",
+          }).maybeSingle();
+        }
       }
-      savedTo = "firestore";
     } catch (e: any) {
-      console.log("[ADMIN-API] Firestore write error:", e.message);
+      console.log("[ADMIN-API] Supabase write error:", e.message);
     }
   }
-  // Always save to file fallback too (admin may read from /tmp when Firestore read quota exceeded)
+  // Always save to file fallback too
   const all = loadFileTransactions();
   all.push(tx);
   saveFileTransactions(all);
@@ -92,19 +106,18 @@ async function readTransaction(id: string): Promise<any | null> {
 }
 
 async function updateTransactionInAll(id: string, updates: Record<string, any>) {
-  const db = await initFirestore();
-  if (db) {
+  const sb = getSupabase();
+  if (sb) {
     try {
-      await db.collection("transactions").doc(id).update(updates);
+      await sb.from("transactions").update(updates).eq("id", id);
     } catch (e: any) {
-      console.log("[ADMIN-API] Firestore update error:", e.message);
+      console.log("[ADMIN-API] Supabase update error:", e.message);
     }
   }
   // Always update file + in-memory too
   const all = loadFileTransactions();
   const idx = all.findIndex((t: any) => t.id === id);
   if (idx === -1) {
-    // Not in file cache yet; try to rebuild from Firestore (if available) or seed from db.json
     const initialTx = await readTransaction(id);
     if (initialTx) { all.push({ ...initialTx, ...updates }); }
   } else {
@@ -192,34 +205,14 @@ export default async function handler(req: any, res: any) {
 
     // GET /api/billing/admin/diag — diagnostic info
     if (req.method === "GET" && pathname === "/api/billing/admin/diag") {
-      const db = await initFirestore();
-      const saExists = !!process.env.FIREBASE_SERVICE_ACCOUNT;
-      const saLen = (process.env.FIREBASE_SERVICE_ACCOUNT || "").length;
-      const dbJsonExists = existsSync(DB_PATH);
-      let firestoreGetError: string | null = null;
-      let firestoreSetError: string | null = null;
-      if (db) {
-        try {
-          await db.collection("_diag_test").doc("_test").get();
-        } catch (e: any) {
-          firestoreGetError = e.message;
-        }
-        try {
-          await db.collection("_diag_test").doc("_test").set({ ts: Date.now() });
-        } catch (e: any) {
-          firestoreSetError = e.message;
-        }
-      }
+      const sb = getSupabase();
       res.setHeader("Content-Type", "application/json");
       res.status(200).end(JSON.stringify({
-        firebaseConfigured: saExists,
-        firebaseServiceAccountLength: saLen,
-        firestoreDbReady: !!db,
-        fsInitDone,
-        dbJsonPath: DB_PATH,
-        dbJsonExists,
-        firestoreGetError,
-        firestoreSetError,
+        supabaseConfigured: !!sb,
+        supabaseUrlSet: !!process.env.SUPABASE_URL,
+        supabaseKeySet: !!(process.env.SUPABASE_ANON_KEY),
+        memTransactionsCount: memTransactions?.length || 0,
+        tmpTransactionsExists: existsSync(TMP_PATH),
       }));
       return;
     }
@@ -243,14 +236,13 @@ export default async function handler(req: any, res: any) {
       const txId = decodeURIComponent(pathname.split("/").pop() || "");
       const tx = await readTransaction(txId);
       if (!tx || !tx.screenshotBase64) {
-        // Coba dari Firestore screenshots collection
-        const db = await initFirestore();
-        if (db) {
+        // Coba dari Supabase screenshots table
+        const sb = getSupabase();
+        if (sb) {
           try {
-            const snap = await db.collection("screenshots").doc(txId).get();
-            if (snap.exists) {
-              const data = snap.data()!;
-              const mime = data.mimeType || "image/png";
+            const { data } = await sb.from("screenshots").select("*").eq("transaction_id", txId).maybeSingle();
+            if (data) {
+              const mime = data.mime_type || "image/png";
               const img = Buffer.from(data.base64, "base64");
               res.setHeader("Content-Type", mime);
               res.setHeader("Content-Length", img.length.toString());

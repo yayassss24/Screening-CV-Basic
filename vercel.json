@@ -5,6 +5,7 @@
   "outputDirectory": "dist",
   "routes": [
     { "handle": "filesystem" },
+    { "src": "/api/test", "dest": "api/test.ts" },
     { "src": "/api/billing/create-transaction", "dest": "api/admin-api.ts" },
     { "src": "/api/billing/transactions", "dest": "api/admin-api.ts" },
     { "src": "/api/billing/admin/(.*)", "dest": "api/admin-api.ts" },

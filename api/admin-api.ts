@@ -31,6 +31,36 @@ async function getSupabaseClient() {
 
 async function readAllTransactions(): Promise<any[]> {
   if (memTransactions) return memTransactions;
+  // 1) Load from file first (fastest, has full screenshot data)
+  const fileTx = loadFileTransactions();
+  if (fileTx.length > 0) {
+    memTransactions = fileTx;
+    // 2) Enrich with Supabase data in background (won't affect current request)
+    const sb = await getSupabaseClient();
+    if (sb) {
+      try {
+        const { data, error } = await sb
+          .from("transactions")
+          .select("*")
+          .order("created_at", { ascending: false });
+        if (!error && data && data.length > 0) {
+          const supaMap = new Map(data.map((t: any) => [t.id, t]));
+          for (const tx of memTransactions) {
+            const s = supaMap.get(tx.id);
+            if (s) {
+              if (!tx.screenshotBase64 && s.screenshot_base64) tx.screenshotBase64 = s.screenshot_base64;
+              if (!tx.screenshotMimeType && s.screenshot_mime_type) tx.screenshotMimeType = s.screenshot_mime_type;
+              if (s.verified_at && !tx.verified_at) tx.verified_at = s.verified_at;
+              if (s.code_plain_for_db && !tx.codePlainForDb) tx.codePlainForDb = s.code_plain_for_db;
+            }
+          }
+          saveFileTransactions(memTransactions);
+        }
+      } catch {}
+    }
+    return memTransactions;
+  }
+  // 3) Fallback: load from Supabase directly
   const sb = await getSupabaseClient();
   if (sb) {
     try {
@@ -50,12 +80,11 @@ async function readAllTransactions(): Promise<any[]> {
           codePlainForDb: t.code_plain_for_db,
           verified_at: t.verified_at,
         }));
+        saveFileTransactions(memTransactions);
         return memTransactions;
       }
     } catch {}
   }
-  const fileTx = loadFileTransactions();
-  if (fileTx.length > 0) { memTransactions = fileTx; return memTransactions; }
   return [];
 }
 
@@ -159,6 +188,8 @@ export default async function handler(req: any, res: any) {
         resendCount: 0,
         verifiedIdentity: false,
         hasScreenshot: !!screenshotBase64,
+        screenshotBase64: screenshotBase64 || null,
+        screenshotMimeType: screenshotMimeType || null,
       };
 
       const savedTo = await saveTransactionToAll(tx, screenshotBase64, screenshotMimeType);

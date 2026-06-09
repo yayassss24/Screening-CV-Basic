@@ -2,6 +2,38 @@ import { readFileSync, existsSync, writeFileSync } from "fs";
 import { createHash } from "crypto";
 
 const TMP_PATH = "/tmp/transactions.json";
+
+async function sendWaNotification(phone: string, message: string) {
+  const token = process.env.WA_API_KEY;
+  if (!token) return;
+  try {
+    const target = phone.replace(/^62/, "");
+    await fetch("https://api.fonnte.com/send", {
+      method: "POST",
+      headers: { Authorization: token, "Content-Type": "application/json" },
+      body: JSON.stringify({ target, message, countryCode: "62" }),
+    });
+  } catch {}
+}
+
+function notifyAdmin(tx: any) {
+  const adminPhone = process.env.ADMIN_WA || process.env.ADMIN_PHONE;
+  if (!adminPhone || !process.env.WA_API_KEY) return;
+  const nominalStr = (tx.nominal || 0).toLocaleString("id-ID");
+  let statusIcon = "⚠️";
+  if (tx.status === "PAID") statusIcon = "✅";
+  else if (tx.status === "FAILED") statusIcon = "❌";
+  const msg =
+    `${statusIcon} Pembayaran JagoCV\n` +
+    `📧 Email: ${tx.email}\n` +
+    `📦 Paket: ${tx.paket}\n` +
+    `💰 Rp ${nominalStr}\n` +
+    `📌 Status: ${tx.status}\n` +
+    (tx.ai_reason ? `📝 ${tx.ai_reason}\n` : "") +
+    (tx.codePlainForDb ? `🔑 Kode: ${tx.codePlainForDb}\n` : "") +
+    `🆔 ${tx.id}`;
+  sendWaNotification(adminPhone, msg);
+}
 const NOMINAL_MAP: Record<string, number> = { BASIC: 75000, PRO: 100000, TRIAL: 10000 };
 const BANK_NAMES = /(BCA|BNI|MANDIRI|BRI|CIMB|NIAGA|DANAMON|PERMATA|MAYBANK|OCBC|BTN|PANIN|BUKOPIN|JAGO|JENIUS|DIGITAL|BSI|MUAMALAT|SYARIAH|MEGA|BTPN|NOBU|ARTHA|BISNIS|MASPION|HANA|COMMONWEALTH|BANK\s*(\w+))/i;
 const DATE_PATTERNS = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})|(\d{1,2}\s+(Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agu|Sep|Okt|Nov|Des|Januari|Februari|Maret|April|Juni|Juli|Agustus|September|Oktober|November|Desember)\s+\d{2,4})/i;
@@ -410,6 +442,9 @@ export default async function handler(req: any, res: any) {
         success: true, transactionId, paket, nominal, status,
         codePlainForDb, ai_reason, savedTo,
       }));
+
+      // Fire-and-forget WA notification to admin
+      notifyAdmin(tx);
       return;
     }
 
@@ -531,8 +566,13 @@ export default async function handler(req: any, res: any) {
         codePlainForDb: activationCode,
       });
 
+      tx.status = "PAID";
+      tx.codePlainForDb = activationCode;
+
       res.setHeader("Content-Type", "application/json");
       res.status(200).end(JSON.stringify({ success: true, message: "Transaksi dikonfirmasi" }));
+
+      notifyAdmin(tx);
       return;
     }
 
@@ -560,8 +600,12 @@ export default async function handler(req: any, res: any) {
         verified_at: new Date().toISOString(),
       });
 
+      tx.status = "FAILED";
+
       res.setHeader("Content-Type", "application/json");
       res.status(200).end(JSON.stringify({ success: true, message: "Transaksi ditolak" }));
+
+      notifyAdmin(tx);
       return;
     }
 

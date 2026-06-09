@@ -60,7 +60,19 @@ async function autoVerifyScreenshot(base64: string, paket: string): Promise<{ ok
         } catch {}
       }
 
-      // 3) Fallback: Gemini AI Vision
+      // 3) Fallback: local Tesseract.js OCR
+      if (!ocrText) {
+        try {
+          const mod = await import("tesseract.js");
+          const worker = await mod.createWorker("ind+eng");
+          const { data } = await worker.recognize(buffer);
+          await worker.terminate();
+          ocrText = data.text || "";
+          ocrConfidence = data.confidence || 0;
+        } catch {}
+      }
+
+      // 4) Last resort: Gemini AI Vision (API call)
       if (!ocrText) {
         const apiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_PAYMENT;
         if (apiKey) {
@@ -116,20 +128,6 @@ Aturan:
               return { ok: false, reason };
             }
           } catch {}
-        }
-      }
-
-      // 4) Last resort: local Tesseract.js OCR (slow cold start)
-      if (!ocrText) {
-        try {
-          const mod = await import("tesseract.js");
-          const worker = await mod.createWorker("ind+eng");
-          const { data } = await worker.recognize(buffer);
-          await worker.terminate();
-          ocrText = data.text || "";
-          ocrConfidence = data.confidence || 0;
-        } catch (e: any) {
-          return { ok: false, reason: `OCR error: ${e.message}` };
         }
       }
 

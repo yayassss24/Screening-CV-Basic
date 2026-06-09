@@ -22,9 +22,9 @@ function screenshotHash(base64: string): string {
 
 async function autoVerifyScreenshot(base64: string, paket: string): Promise<{ ok: boolean; reason?: string }> {
   const timeout = new Promise<{ ok: false; reason: string }>((_, reject) =>
-    setTimeout(() => reject(new Error("OCR timeout")), 8000)
+    setTimeout(() => reject(new Error("OCR timeout")), 12000)
   );
-  const ocr = (async () => {
+  const verify = (async () => {
     try {
       const buffer = Buffer.from(base64, "base64");
       if (buffer.length < 100) return { ok: false, reason: "Gambar terlalu kecil atau tidak valid." };
@@ -38,84 +38,138 @@ async function autoVerifyScreenshot(base64: string, paket: string): Promise<{ ok
         }
       }
 
-      const mod = await import("tesseract.js");
-      const worker = await mod.createWorker("ind+eng");
-      const { data } = await worker.recognize(buffer);
-      await worker.terminate();
-
-      const ocrText = data.text || "";
-      const ocrConfidence = data.confidence || 0;
-
-      // 2) Cek kualitas OCR — jika confidence rendah (buram)
-      if (ocrConfidence < 30 && ocrText.length < 20) {
-        return { ok: false, reason: "Bukti bayar buram/tidak terbaca — silakan unggah ulang dengan gambar yang lebih jelas." };
-      }
-
-      // 3) Deteksi QRIS
-      if (/QRIS|qris|PEMBAYARAN\s*QRIS/i.test(ocrText)) {
-        return { ok: false, reason: "Gambar adalah kode QRIS, bukan bukti transfer sukses." };
-      }
-
-      // 4) Cek status transfer — cari keyword gagal/pending dulu
-      const hasFailWord = FAIL_KEYWORDS.test(ocrText);
-      const hasSuccessWord = SUCCESS_KEYWORDS.test(ocrText);
-      if (hasFailWord && !hasSuccessWord) {
-        return { ok: false, reason: "Status transfer pending/gagal — bukti menunjukkan transaksi belum berhasil." };
-      }
-
-      // 5) Ekstrak nominal — harus TEPAT (===), bukan >=
       const expected = NOMINAL_MAP[paket] || 0;
-      const nominalMatches = [...ocrText.matchAll(/Rp\s*([0-9.,]+)/gi)];
-      let foundExact = false;
-      let allDetectedNominals: string[] = [];
 
-      for (const m of nominalMatches) {
-        const raw = m[1].replace(/\./g, "").replace(/,/g, "");
-        const amount = parseInt(raw, 10);
-        if (!isNaN(amount)) {
-          allDetectedNominals.push(m[0]);
-          if (amount === expected) foundExact = true;
-        }
+      // 2) Gemini AI Vision — fast, no model download
+      const apiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_PAYMENT;
+      if (apiKey) {
+        try {
+          const { GoogleGenAI } = await import("@google/genai");
+          const ai = new GoogleGenAI({ apiKey });
+
+          const prompt = `Analisis bukti transfer bank ini. Berikan RESPON JSON SAJA (tanpa markdown, tanpa kutip penjelasan):
+{
+  "valid": boolean,
+  "nominal_detected": number | null,
+  "nominal_tepat": boolean,
+  "nominal_kurang": boolean,
+  "nominal_lebih": boolean,
+  "status_transfer": "BERHASIL" | "GAGAL" | "PENDING" | "TIDAK_TERDETEKSI",
+  "bank_terdeteksi": string | null,
+  "tanggal_terdeteksi": string | null,
+  "adalah_qris": boolean,
+  "gambar_buram": boolean,
+  "alasan_penolakan": string | null
+}
+
+Aturan:
+- valid=true hanya jika nominal TEPAT Rp ${expected.toLocaleString("id-ID")}, status BERHASIL, bukan QRIS, dan gambar jelas.
+- nominal_kurang=true jika nominal terdeteksi < ${expected}.
+- nominal_lebih=true jika nominal terdeteksi > ${expected}.
+- Jika gambar adalah QRIS, set adalah_qris=true dan valid=false.
+- Jika gambar buram/tidak terbaca, set gambar_buram=true dan valid=false.
+- alasan_penolakan harus jelas dalam Bahasa Indonesia.`;
+
+          const response = await ai.models.generateContent({
+            model: "gemini-2.0-flash",
+            contents: [{
+              role: "user",
+              parts: [
+                { text: prompt },
+                { inlineData: { mimeType: "image/png", data: base64 } }
+              ]
+            }]
+          });
+
+          const resultText = response.text || "";
+          const jsonMatch = resultText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (parsed.valid === true) {
+              return { ok: true, screenshotHash: hash };
+            }
+            const reason = parsed.alasan_penolakan || (
+              parsed.adalah_qris ? "Gambar adalah kode QRIS, bukan bukti transfer sukses." :
+              parsed.gambar_buram ? "Bukti bayar buram/tidak terbaca — silakan unggah ulang dengan gambar yang lebih jelas." :
+              parsed.nominal_kurang ? `Nominal kurang — dibayar Rp ${parsed.nominal_detected?.toLocaleString("id-ID")} tapi pesan ${paket} (Rp ${expected.toLocaleString("id-ID")}).` :
+              parsed.nominal_lebih ? `Nominal lebih — dibayar Rp ${parsed.nominal_detected?.toLocaleString("id-ID")} tapi pesan ${paket} (Rp ${expected.toLocaleString("id-ID")}). Indikasi salah transfer.` :
+              parsed.status_transfer === "GAGAL" || parsed.status_transfer === "PENDING" ? "Status transfer pending/gagal — bukti menunjukkan transaksi belum berhasil." :
+              `Nominal Rp ${expected.toLocaleString("id-ID")} tidak ditemukan. Pastikan bukti transfer jelas.`
+            );
+            return { ok: false, reason };
+          }
+        } catch {}
       }
 
-      if (!foundExact) {
-        if (allDetectedNominals.length > 0) {
-          // Cek apakah nominal kurang atau lebih
-          for (const m of nominalMatches) {
-            const raw = m[1].replace(/\./g, "").replace(/,/g, "");
-            const amount = parseInt(raw, 10);
-            if (!isNaN(amount)) {
-              if (amount < expected) {
-                return { ok: false, reason: `Nominal kurang — dibayar ${m[0]} tapi pesan ${paket} (Rp ${expected.toLocaleString("id-ID")}).` };
-              }
-              if (amount > expected) {
-                return { ok: false, reason: `Nominal lebih — dibayar ${m[0]} tapi pesan ${paket} (Rp ${expected.toLocaleString("id-ID")}). Indikasi salah transfer.` };
+      // 3) Fallback: Tesseract.js OCR
+      try {
+        const mod = await import("tesseract.js");
+        const worker = await mod.createWorker("ind+eng");
+        const { data } = await worker.recognize(buffer);
+        await worker.terminate();
+
+        const ocrText = data.text || "";
+        const ocrConfidence = data.confidence || 0;
+
+        if (ocrConfidence < 30 && ocrText.length < 20) {
+          return { ok: false, reason: "Bukti bayar buram/tidak terbaca — silakan unggah ulang dengan gambar yang lebih jelas." };
+        }
+        if (/QRIS|qris/i.test(ocrText)) {
+          return { ok: false, reason: "Gambar adalah kode QRIS, bukan bukti transfer sukses." };
+        }
+
+        const hasFailWord = FAIL_KEYWORDS.test(ocrText);
+        const hasSuccessWord = SUCCESS_KEYWORDS.test(ocrText);
+        if (hasFailWord && !hasSuccessWord) {
+          return { ok: false, reason: "Status transfer pending/gagal — bukti menunjukkan transaksi belum berhasil." };
+        }
+
+        const nominalMatches = [...ocrText.matchAll(/Rp\s*([0-9.,]+)/gi)];
+        let foundExact = false;
+        let allDetectedNominals: string[] = [];
+
+        for (const m of nominalMatches) {
+          const raw = m[1].replace(/\./g, "").replace(/,/g, "");
+          const amount = parseInt(raw, 10);
+          if (!isNaN(amount)) {
+            allDetectedNominals.push(m[0]);
+            if (amount === expected) foundExact = true;
+          }
+        }
+
+        if (!foundExact) {
+          if (allDetectedNominals.length > 0) {
+            for (const m of nominalMatches) {
+              const raw = m[1].replace(/\./g, "").replace(/,/g, "");
+              const amount = parseInt(raw, 10);
+              if (!isNaN(amount)) {
+                if (amount < expected) {
+                  return { ok: false, reason: `Nominal kurang — dibayar ${m[0]} tapi pesan ${paket} (Rp ${expected.toLocaleString("id-ID")}).` };
+                }
+                if (amount > expected) {
+                  return { ok: false, reason: `Nominal lebih — dibayar ${m[0]} tapi pesan ${paket} (Rp ${expected.toLocaleString("id-ID")}). Indikasi salah transfer.` };
+                }
               }
             }
+            return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak ditemukan. Terdeteksi: ${allDetectedNominals.join(", ")}.` };
           }
-          // Format tidak familiar
-          return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak ditemukan. Terdeteksi: ${allDetectedNominals.join(", ")}.` };
+          return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak terbaca. Pastikan bukti transfer jelas.` };
         }
-        return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak terbaca. Pastikan bukti transfer jelas.` };
+
+        if (!hasSuccessWord && !hasFailWord) {
+          // no success/fail keywords — allow with note
+        }
+
+        return { ok: true, screenshotHash: hash };
+      } catch (e: any) {
+        return { ok: false, reason: `OCR error: ${e.message}` };
       }
-
-      // 6) Validasi tanggal terlihat (rekomendasi, bukan wajib)
-      const hasDate = DATE_PATTERNS.test(ocrText);
-      const hasBankName = BANK_NAMES.test(ocrText);
-
-      // 7) Validasi keyword berhasil — jika tidak ada kata berhasil sama sekali, peringatkan
-      if (!hasSuccessWord && !hasFailWord) {
-        // Tidak ada keyword sukses atau gagal yang jelas — izinkan lewat dengan catatan
-      }
-
-      // Simpan hash untuk deteksi duplikat
-      return { ok: true, ocrConfidence, ocrText: ocrText.substring(0, 200), hasDate, hasBankName, screenshotHash: hash };
     } catch (e: any) {
       return { ok: false, reason: `OCR error: ${e.message}` };
     }
   })();
 
-  return Promise.race([ocr, timeout])
+  return Promise.race([verify, timeout])
     .catch(() => ({ ok: false, reason: "OCR timeout" }));
 }
 

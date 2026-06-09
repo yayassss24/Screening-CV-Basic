@@ -1,5 +1,5 @@
-import express from "express";
-import cors from "cors";
+const express = require("express");
+const cors = require("cors");
 
 const app = express();
 app.use(cors());
@@ -23,7 +23,7 @@ app.post("/ocr", async (req, res) => {
       return;
     }
 
-    const { createWorker } = await import("tesseract.js");
+    const { createWorker } = require("tesseract.js");
     const worker = await createWorker(language);
     const { data } = await worker.recognize(buffer);
     await worker.terminate();
@@ -33,7 +33,7 @@ app.post("/ocr", async (req, res) => {
       confidence: data.confidence || 0,
       words: data.words?.length || 0,
     });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

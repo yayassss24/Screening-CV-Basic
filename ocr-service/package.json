@@ -3,20 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "esbuild index.ts --bundle --platform=node --format=cjs --outfile=dist/index.js",
-    "start": "node dist/index.js",
-    "dev": "tsx index.ts"
+    "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.21.0",
     "tesseract.js": "^5.1.1",
     "cors": "^2.8.5"
-  },
-  "devDependencies": {
-    "@types/express": "^5.0.0",
-    "@types/cors": "^2.8.17",
-    "esbuild": "^0.25.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
   }
 }

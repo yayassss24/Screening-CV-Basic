@@ -30,14 +30,14 @@ async function autoVerifyScreenshot(base64: string, paket: string): Promise<{ ok
       if (buffer.length < 100) return { ok: false, reason: "Gambar terlalu kecil atau tidak valid." };
       const header = buffer.slice(0, 8).toString("hex");
       const isValidImage = header.startsWith("89504e47") || header.startsWith("ffd8") || header.startsWith("52494646");
-      if (!isValidImage) return { ok: false, reason: "Format gambar tidak valid. Hanya PNG, JPG, atau WebP." };
+      if (!isValidImage) return { ok: false, reason: "Format gambar tidak didukung. Silakan hubungi CS JagoCV untuk informasi lebih lanjut." };
 
       // 1) Cek duplikat screenshot (hash vs semua transaksi existing)
       const hash = screenshotHash(base64);
       const allTx = await readAllTransactions();
       for (const t of allTx) {
         if ((t.screenshotHash && t.screenshotHash === hash) || (t.screenshotBase64 && screenshotHash(t.screenshotBase64) === hash)) {
-          return { ok: false, reason: "Bukti bayar duplikat — gambar ini sudah dipakai untuk order sebelumnya." };
+          return { ok: false, reason: "Mohon maaf, gambar bukti bayar ini sudah terdaftar di transaksi sebelumnya. Silakan hubungi CS JagoCV untuk bantuan." };
         }
       }
 
@@ -121,12 +121,12 @@ Aturan:
               const parsed = JSON.parse(jsonMatch[0]);
               if (parsed.valid === true) return { ok: true, screenshotHash: hash };
               const reason = parsed.alasan_penolakan || (
-                parsed.adalah_qris ? "Gambar adalah kode QRIS, bukan bukti transfer sukses." :
-                parsed.gambar_buram ? "Bukti bayar buram/tidak terbaca — silakan unggah ulang dengan gambar yang lebih jelas." :
-                parsed.nominal_kurang ? `Nominal kurang — dibayar Rp ${parsed.nominal_detected?.toLocaleString("id-ID")} tapi pesan ${paket} (Rp ${expected.toLocaleString("id-ID")}).` :
-                parsed.nominal_lebih ? `Nominal lebih — dibayar Rp ${parsed.nominal_detected?.toLocaleString("id-ID")} tapi pesan ${paket} (Rp ${expected.toLocaleString("id-ID")}). Indikasi salah transfer.` :
-                parsed.status_transfer === "GAGAL" || parsed.status_transfer === "PENDING" ? "Status transfer pending/gagal — bukti menunjukkan transaksi belum berhasil." :
-                `Nominal Rp ${expected.toLocaleString("id-ID")} tidak ditemukan. Pastikan bukti transfer jelas.`
+                parsed.adalah_qris ? "Gambar yang diunggah terdeteksi sebagai kode QR, bukan bukti transfer. Silakan hubungi CS JagoCV untuk informasi lebih lanjut." :
+                parsed.gambar_buram ? "Gambar bukti bayar kurang jelas sehingga nominal tidak terbaca. Silakan hubungi CS JagoCV untuk bantuan." :
+                parsed.nominal_kurang ? `Nominal yang terdeteksi Rp ${parsed.nominal_detected?.toLocaleString("id-ID")} lebih kecil dari harga paket ${paket} (Rp ${expected.toLocaleString("id-ID")}). Silakan hubungi CS JagoCV untuk bantuan.` :
+                parsed.nominal_lebih ? `Nominal yang terdeteksi Rp ${parsed.nominal_detected?.toLocaleString("id-ID")} lebih besar dari harga paket ${paket} (Rp ${expected.toLocaleString("id-ID")}). Silakan hubungi CS JagoCV untuk bantuan.` :
+                parsed.status_transfer === "GAGAL" || parsed.status_transfer === "PENDING" ? "Transaksi pada bukti yang diunggah berstatus gagal/pending, bukan berhasil. Silakan hubungi CS JagoCV untuk bantuan." :
+                `Nominal Rp ${expected.toLocaleString("id-ID")} tidak ditemukan pada gambar. Silakan hubungi CS JagoCV untuk bantuan.`
               );
               return { ok: false, reason };
             }
@@ -135,18 +135,18 @@ Aturan:
       }
 
       // Parse OCR result
-      if (!ocrText) return { ok: false, reason: "Bukti bayar tidak terbaca — silakan unggah ulang dengan gambar yang lebih jelas." };
+      if (!ocrText) return { ok: false, reason: "Mohon maaf, gambar bukti bayar tidak terbaca. Silakan hubungi CS JagoCV untuk bantuan." };
       if (ocrConfidence < 30 && ocrText.length < 20) {
-        return { ok: false, reason: "Bukti bayar buram/tidak terbaca — silakan unggah ulang dengan gambar yang lebih jelas." };
+        return { ok: false, reason: "Gambar bukti bayar kurang jelas. Silakan hubungi CS JagoCV untuk bantuan." };
       }
       if (/QRIS|qris|GRIS|gris|(?<!\w)QR(?!\w)|(?<!\w)GR(?!\w)/i.test(ocrText)) {
-        return { ok: false, reason: "Gambar adalah kode QRIS, bukan bukti transfer sukses." };
+        return { ok: false, reason: "Gambar yang diunggah terdeteksi sebagai kode QR, bukan bukti transfer. Silakan hubungi CS JagoCV untuk informasi lebih lanjut." };
       }
 
       const hasFailWord = FAIL_KEYWORDS.test(ocrText);
       const hasSuccessWord = SUCCESS_KEYWORDS.test(ocrText);
       if (hasFailWord && !hasSuccessWord) {
-        return { ok: false, reason: "Status transfer pending/gagal — bukti menunjukkan transaksi belum berhasil." };
+        return { ok: false, reason: "Transaksi pada bukti yang diunggah berstatus gagal/pending, bukan berhasil. Silakan hubungi CS JagoCV untuk bantuan." };
       }
 
       const nominalMatches = [...ocrText.matchAll(/Rp\s*([0-9.,]+)/gi)];
@@ -168,13 +168,13 @@ Aturan:
             const raw = m[1].replace(/\./g, "").replace(/,/g, "");
             const amount = parseInt(raw, 10);
             if (!isNaN(amount)) {
-              if (amount < expected) return { ok: false, reason: `Nominal kurang — dibayar ${m[0]} tapi pesan ${paket} (Rp ${expected.toLocaleString("id-ID")}).` };
-              if (amount > expected) return { ok: false, reason: `Nominal lebih — dibayar ${m[0]} tapi pesan ${paket} (Rp ${expected.toLocaleString("id-ID")}). Indikasi salah transfer.` };
+              if (amount < expected) return { ok: false, reason: `Nominal yang terdeteksi ${m[0]} lebih kecil dari harga paket ${paket} (Rp ${expected.toLocaleString("id-ID")}). Silakan hubungi CS JagoCV untuk bantuan.` };
+              if (amount > expected) return { ok: false, reason: `Nominal yang terdeteksi ${m[0]} lebih besar dari harga paket ${paket} (Rp ${expected.toLocaleString("id-ID")}). Silakan hubungi CS JagoCV untuk bantuan.` };
             }
           }
-          return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak ditemukan. Terdeteksi: ${allDetectedNominals.join(", ")}.` };
+          return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak ditemukan pada gambar. Terdeteksi: ${allDetectedNominals.join(", ")}. Silakan hubungi CS JagoCV untuk bantuan.` };
         }
-        return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak terbaca. Pastikan bukti transfer jelas.` };
+        return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak terbaca pada gambar. Silakan hubungi CS JagoCV untuk bantuan.` };
       }
 
       return { ok: true, screenshotHash: hash };

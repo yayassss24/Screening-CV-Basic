@@ -351,7 +351,7 @@ export default function App() {
           setCsChatStep("success");
           setCsChatLogs(prev => [...prev, {
             sender: "bot" as const,
-            text: `🎉 Pembayaran Anda telah **DIVERIFIKASI**! Paket **${csSelectedPackage}** Anda siap digunakan.`,
+            text: `🎉 Pembayaran Anda telah DIVERIFIKASI! Paket ${csSelectedPackage} Anda siap digunakan.`,
             timestamp: new Date()
           }]);
         } else if (myTx.status === "FAILED") {
@@ -359,7 +359,7 @@ export default function App() {
           setCsChatStep("ask_problem");
           setCsChatLogs(prev => [...prev, {
             sender: "bot" as const,
-            text: `❌ **Pembayaran Ditolak**\n\n${myTx.ai_reason ? `📌 Alasan: ${myTx.ai_reason}\n\n` : ""}Silakan unggah ulang bukti pembayaran yang benar melalui CS.`,
+            text: `❌ Pembayaran Belum Diverifikasi\n\n${myTx.ai_reason ? `${myTx.ai_reason}\n\n` : ""}Silakan hubungi CS JagoCV untuk informasi lebih lanjut.`,
             timestamp: new Date()
           }]);
         }
@@ -382,7 +382,7 @@ export default function App() {
       },
       {
         sender: "bot" as const,
-        text: `Silakan scan QRIS di bawah untuk pembayaran **Rp ${nominal.toLocaleString("id-ID")}** menggunakan aplikasi perbankan/e-wallet Anda. Setelah sukses, lanjutkan ke tahap berikutnya.`,
+        text: `Silakan scan QRIS di bawah untuk pembayaran Rp ${nominal.toLocaleString("id-ID")} menggunakan aplikasi perbankan/e-wallet Anda. Setelah sukses, lanjutkan ke tahap berikutnya.`,
         image: "https://raw.githubusercontent.com/yayassss24/ai-screening-cv/main/ChatGPT%20Image%20Jun%202%2C%202026%2C%2002_49_01%20PM.png",
         timestamp: new Date()
       }
@@ -474,18 +474,18 @@ export default function App() {
               ...prev,
               {
                 sender: "bot" as const,
-                text: `✅ **Pembayaran Terverifikasi!**
+                text: `✅ Pembayaran Terverifikasi!
 
 Terima kasih! Pembayaran Anda telah diverifikasi otomatis oleh OCR dan cocok dengan harga pesanan.
 
-Kode aktivasi telah dikirim ke email Anda. Silakan cek inbox (atau folder spam) untuk mengaktifkan paket **${txData.paket}** Anda.`,
+Kode aktivasi telah dikirim ke email Anda. Silakan cek inbox (atau folder spam) untuk mengaktifkan paket ${txData.paket} Anda.`,
                 timestamp: new Date()
               }
             ]);
           } else if (txData.status === "FAILED") {
             // ❌ Pembayaran ditolak
             const reasonText = txData.ai_reason
-              ? `\n\n📌 **Alasan:** ${txData.ai_reason}`
+              ? `\n\n${txData.ai_reason}`
               : "";
             setCsAiReason(txData.ai_reason || null);
             setCsChatStep("ask_problem");
@@ -493,9 +493,9 @@ Kode aktivasi telah dikirim ke email Anda. Silakan cek inbox (atau folder spam) 
               ...prev,
               {
                 sender: "bot" as const,
-                text: `❌ **Pembayaran Ditolak**${reasonText}
+                text: `❌ Pembayaran Belum Diverifikasi${reasonText}
 
-Silakan unggah ulang bukti pembayaran yang benar melalui CS.`,
+Silakan hubungi CS JagoCV untuk informasi lebih lanjut.`,
                 timestamp: new Date()
               }
             ]);
@@ -510,7 +510,7 @@ Silakan unggah ulang bukti pembayaran yang benar melalui CS.`,
 
 📋 ID Transaksi: ${transactionId}
 
-⏳ Status: **MENUNGGU VERIFIKASI ADMIN**
+⏳ Status: MENUNGGU VERIFIKASI ADMIN
 
 Pembayaran Anda sedang diperiksa oleh tim admin. Silakan tunggu konfirmasi.
 Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi setelah dikonfirmasi.
@@ -578,7 +578,7 @@ Jika ada pertanyaan, hubungi admin via WhatsApp.`,
         sender: "bot" as const,
         text: `Terima kasih! Masalah Anda telah dicatat. Admin kami akan memeriksa bukti transfer dan keterangan Anda.
 
-⏳ Status: **MENUNGGU VERIFIKASI ADMIN**
+⏳ Status: MENUNGGU VERIFIKASI ADMIN
 📋 ID Transaksi: ${csTransactionId}
 
 Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi setelah dikonfirmasi.`,
@@ -838,7 +838,7 @@ Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi 
     setCsChatLogs([
       {
         sender: "bot" as const,
-        text: `Anda memilih **Paket ${paket}**.\n\nSilakan masukkan data diri Anda untuk melanjutkan ke pembayaran.`,
+        text: `Anda memilih Paket ${paket}.\n\nSilakan masukkan data diri Anda untuk melanjutkan ke pembayaran.`,
         timestamp: new Date()
       }
     ]);
@@ -3096,16 +3096,16 @@ Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi 
               {csChatStep === "ask_problem" && (
                 <form onSubmit={handleCsSubmitProblem} className="bg-slate-800 p-3.5 rounded-xl border border-amber-700 space-y-3 animate-fadeIn text-left text-slate-200">
                   <div className="text-amber-400 font-bold text-[9.5px] uppercase tracking-wider block border-b border-amber-900 pb-1.5">
-                    ⚠ Pembayaran Bermasalah
+                    ⚠ Pembayaran Belum Diverifikasi
                   </div>
                   <p className="text-[10px] text-slate-300 leading-normal">
-                    Pembayaran Anda tidak dapat diverifikasi.
+                    Pembayaran Anda belum dapat diverifikasi.
                     {csAiReason && (
                       <span className="block mt-1 text-amber-300 font-semibold">{csAiReason}</span>
                     )}
                   </p>
                   <p className="text-[10px] text-slate-400 leading-normal">
-                    Jelaskan masalah yang Anda alami saat melakukan pembayaran:
+                    Jika ada yang ingin disampaikan, silakan tulis di bawah:
                   </p>
                   <textarea
                     required
@@ -3113,13 +3113,13 @@ Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi 
                     onChange={(e) => setCsProblemMessage(e.target.value)}
                     rows={3}
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white outline-none focus:border-amber-500 transition-colors text-[10.5px] resize-none"
-                    placeholder="Contoh: Saya transfer Rp75.000 tapi pesan Paket PRO / Gambar struk terpotong / Saya sudah bayar tapi status masih pending"
+                    placeholder="Silakan jelaskan kendala yang Anda alami agar dapat kami bantu."
                   />
                   <button
                     type="submit"
                     className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white font-extrabold py-2 px-4 rounded-lg transition-all shadow-md cursor-pointer hover:shadow-lg active:scale-[0.98] text-[10.5px]"
                   >
-                    Kirim Penjelasan → Verifikasi Admin
+                    Kirim ke CS JagoCV
                   </button>
                 </form>
               )}

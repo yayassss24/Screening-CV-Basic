@@ -13,34 +13,42 @@ function generateActivationCode(paket: string) {
 }
 
 async function autoVerifyScreenshot(base64: string, paket: string): Promise<{ ok: boolean; reason?: string }> {
-  try {
-    const buffer = Buffer.from(base64, "base64");
-    if (buffer.length < 100) return { ok: false, reason: "Gambar terlalu kecil atau tidak valid." };
+  const timeout = new Promise<{ ok: false; reason: string }>((_, reject) =>
+    setTimeout(() => reject(new Error("OCR timeout")), 8000)
+  );
+  const ocr = (async () => {
+    try {
+      const buffer = Buffer.from(base64, "base64");
+      if (buffer.length < 100) return { ok: false, reason: "Gambar terlalu kecil atau tidak valid." };
 
-    const mod = await import("tesseract.js");
-    const worker = await mod.createWorker("ind+eng");
-    const { data } = await worker.recognize(buffer);
-    await worker.terminate();
+      const mod = await import("tesseract.js");
+      const worker = await mod.createWorker("ind+eng");
+      const { data } = await worker.recognize(buffer);
+      await worker.terminate();
 
-    const ocrText = data.text || "";
+      const ocrText = data.text || "";
 
-    if (/QRIS|qris|PEMBAYARAN\s*QRIS/i.test(ocrText)) {
-      return { ok: false, reason: "Gambar adalah kode QRIS, bukan bukti transfer sukses." };
+      if (/QRIS|qris|PEMBAYARAN\s*QRIS/i.test(ocrText)) {
+        return { ok: false, reason: "Gambar adalah kode QRIS, bukan bukti transfer sukses." };
+      }
+
+      const expected = NOMINAL_MAP[paket] || 75000;
+      const matches = [...ocrText.matchAll(/Rp\s*([0-9.,]+)/gi)];
+      for (const m of matches) {
+        const raw = m[1].replace(/\./g, "").replace(/,/g, "");
+        const amount = parseInt(raw, 10);
+        if (!isNaN(amount) && amount >= expected) return { ok: true };
+      }
+
+      const detected = matches.map(m => m[0]).join(", ") || "tidak terdeteksi";
+      return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak ditemukan. Terdeteksi: ${detected}` };
+    } catch (e: any) {
+      return { ok: false, reason: `OCR error: ${e.message}` };
     }
+  })();
 
-    const expected = NOMINAL_MAP[paket] || 75000;
-    const matches = [...ocrText.matchAll(/Rp\s*([0-9.,]+)/gi)];
-    for (const m of matches) {
-      const raw = m[1].replace(/\./g, "").replace(/,/g, "");
-      const amount = parseInt(raw, 10);
-      if (!isNaN(amount) && amount >= expected) return { ok: true };
-    }
-
-    const detected = matches.map(m => m[0]).join(", ") || "tidak terdeteksi";
-    return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak ditemukan. Terdeteksi: ${detected}` };
-  } catch (e: any) {
-    return { ok: false, reason: `OCR error: ${e.message}` };
-  }
+  return Promise.race([ocr, timeout])
+    .catch(() => ({ ok: false, reason: "OCR timeout" }));
 }
 
 function loadFileTransactions(): any[] {
@@ -228,8 +236,9 @@ export default async function handler(req: any, res: any) {
           status = "PAID";
           codePlainForDb = generateActivationCode(paket);
           verified_at = new Date().toISOString();
-        } else if (result.reason && result.reason.startsWith("OCR error")) {
+        } else if (result.reason === "OCR timeout") {
           status = "PENDING VERIFIKASI MANUAL";
+          ai_reason = null;
         } else {
           status = "FAILED";
           ai_reason = result.reason || null;

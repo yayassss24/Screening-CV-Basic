@@ -452,6 +452,7 @@ export default async function handler(req: any, res: any) {
         supabaseKeySet,
         supabaseStatus,
         geminiKeySet: !!(process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_PAYMENT),
+        ocrServiceUrlSet: !!process.env.OCR_SERVICE_URL,
         memTransactionsCount: memTransactions?.length || 0,
         tmpTransactionsExists: existsSync(TMP_PATH),
       }));

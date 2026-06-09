@@ -9,8 +9,8 @@
     { "src": "/api/billing/create-transaction", "dest": "api/admin-api.ts" },
     { "src": "/api/billing/transactions", "dest": "api/admin-api.ts" },
     { "src": "/api/billing/admin/(.*)", "dest": "api/admin-api.ts" },
-    { "src": "/api/(.*)", "dest": "api/index.ts" },
     { "src": "/admin", "dest": "api/admin.ts" },
+    { "src": "/api/(.*)", "dest": "/index.html" },
     { "src": "/(.*)", "dest": "/index.html" }
   ]
 }

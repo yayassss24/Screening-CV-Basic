@@ -50,7 +50,7 @@ async function autoVerifyScreenshot(base64: string, paket: string): Promise<{ ok
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ image: base64, language: "ind+eng" }),
-            signal: AbortSignal.timeout(8000),
+            signal: AbortSignal.timeout(15000),
           });
           if (resp.ok) {
             const result = await resp.json();

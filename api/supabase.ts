@@ -1,4 +1,4 @@
-let _createClient: any = null;
+let _createClient: ((url: string, key: string) => any) | null = null;
 let _sbLoadAttempted = false;
 
 async function getCreateClient() {
@@ -36,10 +36,4 @@ export async function getSupabase() {
     console.error("[SUPABASE] Init error:", e.message);
     return null;
   }
-}
-
-export function mustGetSupabase() {
-  const sb = getSupabase();
-  if (!sb) throw new Error("Supabase not configured");
-  return sb;
 }

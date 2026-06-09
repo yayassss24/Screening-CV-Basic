@@ -183,42 +183,13 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    // GET /api/billing/admin/diag — diagnostic info
+    // GET /api/billing/admin/diag
     if (req.method === "GET" && pathname === "/api/billing/admin/diag") {
-      // Test Supabase step by step
-      const url = process.env.SUPABASE_URL || "(not set)";
-      const key = process.env.SUPABASE_ANON_KEY ? `set (${process.env.SUPABASE_ANON_KEY.length} chars)` : "(not set)";
-      let initError: string | null = null;
-      let importOk = false;
-      let clientOk = false;
-      let queryOk = false;
-
-      try {
-        const mod = await import("@supabase/supabase-js");
-        importOk = !!mod.createClient;
-        if (importOk && url !== "(not set)" && key !== "(not set)") {
-          try {
-            const c = mod.createClient(url, key);
-            clientOk = true;
-            const { data } = await c.from("transactions").select("id").limit(1);
-            queryOk = data !== undefined;
-          } catch (e: any) {
-            initError = e.message?.substring(0, 200);
-          }
-        }
-      } catch (e: any) {
-        initError = e.message?.substring(0, 200);
-      }
-
       res.setHeader("Content-Type", "application/json");
       res.status(200).end(JSON.stringify({
-        mode: clientOk && queryOk ? "supabase+file" : "file-only",
-        supabaseUrl: url,
-        supabaseAnonKey: key,
-        importOk,
-        clientOk,
-        queryOk,
-        initError,
+        mode: "file-only",
+        supabaseUrl: (process.env.SUPABASE_URL || "").substring(0, 40),
+        supabaseKeySet: !!process.env.SUPABASE_ANON_KEY,
         memTransactionsCount: memTransactions?.length || 0,
         tmpTransactionsExists: existsSync(TMP_PATH),
       }));

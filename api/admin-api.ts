@@ -1,7 +1,5 @@
 import { readFileSync, existsSync, writeFileSync } from "fs";
 import { createHash } from "crypto";
-import { getSupabase as _getSupabase } from "./supabase";
-const getSupabase = () => _getSupabase();
 
 const TMP_PATH = "/tmp/transactions.json";
 
@@ -22,36 +20,6 @@ function saveFileTransactions(txns: any[]) {
 
 async function readAllTransactions(): Promise<any[]> {
   if (memTransactions) return memTransactions;
-  const sb = await getSupabase();
-  if (sb) {
-    try {
-      const { data, error } = await sb
-        .from("transactions")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (!error && data) {
-        memTransactions = data.map((t: any) => ({
-          id: t.id,
-          email: t.email,
-          paket: t.paket,
-          nominal: t.nominal,
-          status: t.status,
-          createdAt: t.created_at,
-          resendCount: t.resend_count,
-          verifiedIdentity: t.verified_identity,
-          hasScreenshot: t.has_screenshot,
-          screenshotBase64: t.screenshot_base64,
-          screenshotMimeType: t.screenshot_mime_type,
-          codePlainForDb: t.code_plain_for_db,
-          verified_at: t.verified_at,
-          ai_recommendation: t.ai_recommendation,
-        }));
-        return memTransactions;
-      }
-    } catch (e: any) {
-      console.log("[ADMIN-API] Supabase read error:", e.message);
-    }
-  }
   const fileTx = loadFileTransactions();
   if (fileTx.length > 0) {
     memTransactions = fileTx;
@@ -61,43 +29,11 @@ async function readAllTransactions(): Promise<any[]> {
 }
 
 async function saveTransactionToAll(tx: any, screenshotBase64?: string, screenshotMimeType?: string) {
-  let savedTo = "file";
-  const sb = await getSupabase();
-  if (sb) {
-    try {
-      const { error } = await sb.from("transactions").insert({
-        id: tx.id,
-        email: tx.email,
-        paket: tx.paket,
-        nominal: tx.nominal,
-        status: tx.status,
-        created_at: tx.createdAt,
-        resend_count: tx.resendCount || 0,
-        verified_identity: tx.verifiedIdentity || false,
-        has_screenshot: !!screenshotBase64,
-        screenshot_base64: screenshotBase64 || null,
-        screenshot_mime_type: screenshotMimeType || null,
-      });
-      if (!error) {
-        savedTo = "supabase";
-        if (screenshotBase64) {
-          await sb.from("screenshots").insert({
-            transaction_id: tx.id,
-            base64: screenshotBase64,
-            mime_type: screenshotMimeType || "image/png",
-          }).maybeSingle();
-        }
-      }
-    } catch (e: any) {
-      console.log("[ADMIN-API] Supabase write error:", e.message);
-    }
-  }
-  // Always save to file fallback too
   const all = loadFileTransactions();
   all.push(tx);
   saveFileTransactions(all);
   memTransactions = all;
-  return savedTo;
+  return "file";
 }
 
 async function readTransaction(id: string): Promise<any | null> {
@@ -106,15 +42,6 @@ async function readTransaction(id: string): Promise<any | null> {
 }
 
 async function updateTransactionInAll(id: string, updates: Record<string, any>) {
-  const sb = await getSupabase();
-  if (sb) {
-    try {
-      await sb.from("transactions").update(updates).eq("id", id);
-    } catch (e: any) {
-      console.log("[ADMIN-API] Supabase update error:", e.message);
-    }
-  }
-  // Always update file + in-memory too
   const all = loadFileTransactions();
   const idx = all.findIndex((t: any) => t.id === id);
   if (idx === -1) {
@@ -205,12 +132,9 @@ export default async function handler(req: any, res: any) {
 
     // GET /api/billing/admin/diag — diagnostic info
     if (req.method === "GET" && pathname === "/api/billing/admin/diag") {
-      const sb = await getSupabase();
       res.setHeader("Content-Type", "application/json");
       res.status(200).end(JSON.stringify({
-        supabaseConfigured: !!sb,
-        supabaseUrlSet: !!process.env.SUPABASE_URL,
-        supabaseKeySet: !!(process.env.SUPABASE_ANON_KEY),
+        mode: "file-only",
         memTransactionsCount: memTransactions?.length || 0,
         tmpTransactionsExists: existsSync(TMP_PATH),
       }));
@@ -236,21 +160,6 @@ export default async function handler(req: any, res: any) {
       const txId = decodeURIComponent(pathname.split("/").pop() || "");
       const tx = await readTransaction(txId);
       if (!tx || !tx.screenshotBase64) {
-        // Coba dari Supabase screenshots table
-        const sb = await getSupabase();
-        if (sb) {
-          try {
-            const { data } = await sb.from("screenshots").select("*").eq("transaction_id", txId).maybeSingle();
-            if (data) {
-              const mime = data.mime_type || "image/png";
-              const img = Buffer.from(data.base64, "base64");
-              res.setHeader("Content-Type", mime);
-              res.setHeader("Content-Length", img.length.toString());
-              res.status(200).end(img);
-              return;
-            }
-          } catch {}
-        }
         res.statusCode = 404;
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify({ error: "Screenshot tidak ditemukan" }));

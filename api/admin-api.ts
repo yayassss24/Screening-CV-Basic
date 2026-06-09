@@ -17,14 +17,63 @@ function saveFileTransactions(txns: any[]) {
   } catch {}
 }
 
+async function getSupabaseClient() {
+  const supabaseUrl = (process.env.SUPABASE_URL || "").replace(/\/rest\/v1\/?$/, "");
+  const supabaseKey = process.env.SUPABASE_ANON_KEY || "";
+  if (!supabaseUrl || !supabaseKey) return null;
+  try {
+    const mod = await import("@supabase/supabase-js");
+    return mod.createClient(supabaseUrl, supabaseKey);
+  } catch {
+    return null;
+  }
+}
+
 async function readAllTransactions(): Promise<any[]> {
   if (memTransactions) return memTransactions;
+  const sb = await getSupabaseClient();
+  if (sb) {
+    try {
+      const { data, error } = await sb
+        .from("transactions")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (!error && data && data.length > 0) {
+        memTransactions = data.map((t: any) => ({
+          id: t.id, email: t.email, paket: t.paket,
+          nominal: t.nominal, status: t.status,
+          createdAt: t.created_at, resendCount: t.resend_count,
+          verifiedIdentity: t.verified_identity,
+          hasScreenshot: t.has_screenshot,
+          screenshotBase64: t.screenshot_base64,
+          screenshotMimeType: t.screenshot_mime_type,
+          codePlainForDb: t.code_plain_for_db,
+          verified_at: t.verified_at,
+        }));
+        return memTransactions;
+      }
+    } catch {}
+  }
   const fileTx = loadFileTransactions();
   if (fileTx.length > 0) { memTransactions = fileTx; return memTransactions; }
   return [];
 }
 
 async function saveTransactionToAll(tx: any, screenshotBase64?: string, screenshotMimeType?: string) {
+  const sb = await getSupabaseClient();
+  if (sb) {
+    try {
+      await sb.from("transactions").insert({
+        id: tx.id, email: tx.email, paket: tx.paket,
+        nominal: tx.nominal, status: tx.status,
+        created_at: tx.createdAt, resend_count: tx.resendCount || 0,
+        verified_identity: tx.verifiedIdentity || false,
+        has_screenshot: !!screenshotBase64,
+        screenshot_base64: screenshotBase64 || null,
+        screenshot_mime_type: screenshotMimeType || null,
+      });
+    } catch {}
+  }
   const all = loadFileTransactions();
   all.push(tx);
   saveFileTransactions(all);
@@ -37,6 +86,12 @@ async function readTransaction(id: string): Promise<any | null> {
 }
 
 async function updateTransactionInAll(id: string, updates: Record<string, any>) {
+  const sb = await getSupabaseClient();
+  if (sb) {
+    try {
+      await sb.from("transactions").update(updates).eq("id", id);
+    } catch {}
+  }
   const all = loadFileTransactions();
   const idx = all.findIndex((t: any) => t.id === id);
   if (idx === -1) {
@@ -134,7 +189,7 @@ export default async function handler(req: any, res: any) {
         const mod = await import("@supabase/supabase-js");
         if (mod && mod.createClient) {
           const sb = mod.createClient(supabaseUrl, process.env.SUPABASE_ANON_KEY || "");
-          const { data, error } = await sb.from("transactions").select("count(*)", { count: "exact" });
+          const { count, error } = await sb.from("transactions").select("*", { count: "exact", head: true });
           supabaseStatus = error ? `supa-error: ${error.message}` : "connected";
         } else {
           supabaseStatus = "createClient-not-found";

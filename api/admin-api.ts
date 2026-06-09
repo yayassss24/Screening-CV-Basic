@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from "fs";
 import crypto from "crypto";
-import { getSupabase } from "./supabase";
+import { getSupabase as _getSupabase } from "./supabase";
+const getSupabase = () => _getSupabase();
 
 const TMP_PATH = "/tmp/transactions.json";
 
@@ -22,7 +23,7 @@ function saveFileTransactions(txns: any[]) {
 
 async function readAllTransactions(): Promise<any[]> {
   if (memTransactions) return memTransactions;
-  const sb = getSupabase();
+  const sb = await getSupabase();
   if (sb) {
     try {
       const { data, error } = await sb
@@ -62,7 +63,7 @@ async function readAllTransactions(): Promise<any[]> {
 
 async function saveTransactionToAll(tx: any, screenshotBase64?: string, screenshotMimeType?: string) {
   let savedTo = "file";
-  const sb = getSupabase();
+  const sb = await getSupabase();
   if (sb) {
     try {
       const { error } = await sb.from("transactions").insert({
@@ -106,7 +107,7 @@ async function readTransaction(id: string): Promise<any | null> {
 }
 
 async function updateTransactionInAll(id: string, updates: Record<string, any>) {
-  const sb = getSupabase();
+  const sb = await getSupabase();
   if (sb) {
     try {
       await sb.from("transactions").update(updates).eq("id", id);
@@ -205,7 +206,7 @@ export default async function handler(req: any, res: any) {
 
     // GET /api/billing/admin/diag — diagnostic info
     if (req.method === "GET" && pathname === "/api/billing/admin/diag") {
-      const sb = getSupabase();
+      const sb = await getSupabase();
       res.setHeader("Content-Type", "application/json");
       res.status(200).end(JSON.stringify({
         supabaseConfigured: !!sb,
@@ -237,7 +238,7 @@ export default async function handler(req: any, res: any) {
       const tx = await readTransaction(txId);
       if (!tx || !tx.screenshotBase64) {
         // Coba dari Supabase screenshots table
-        const sb = getSupabase();
+        const sb = await getSupabase();
         if (sb) {
           try {
             const { data } = await sb.from("screenshots").select("*").eq("transaction_id", txId).maybeSingle();

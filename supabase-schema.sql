@@ -1,5 +1,6 @@
 -- Supabase Schema for JagoCV
 -- Jalankan di Supabase SQL Editor (https://supabase.com > SQL Editor)
+-- NOTE: Aman di-run berulang kali (idempotent)
 
 -- 1. USERS
 create table if not exists users (
@@ -13,6 +14,9 @@ create table if not exists users (
 );
 
 alter table users enable row level security;
+drop policy if exists "public read users" on users;
+drop policy if exists "public insert users" on users;
+drop policy if exists "public update users" on users;
 create policy "public read users" on users for select using (true);
 create policy "public insert users" on users for insert with check (true);
 create policy "public update users" on users for update using (true);
@@ -42,6 +46,9 @@ create table if not exists transactions (
 );
 
 alter table transactions enable row level security;
+drop policy if exists "public read transactions" on transactions;
+drop policy if exists "public insert transactions" on transactions;
+drop policy if exists "public update transactions" on transactions;
 create policy "public read transactions" on transactions for select using (true);
 create policy "public insert transactions" on transactions for insert with check (true);
 create policy "public update transactions" on transactions for update using (true);
@@ -54,6 +61,9 @@ create table if not exists screenshots (
 );
 
 alter table screenshots enable row level security;
+drop policy if exists "public read screenshots" on screenshots;
+drop policy if exists "public insert screenshots" on screenshots;
+drop policy if exists "public update screenshots" on screenshots;
 create policy "public read screenshots" on screenshots for select using (true);
 create policy "public insert screenshots" on screenshots for insert with check (true);
 create policy "public update screenshots" on screenshots for update using (true);
@@ -72,6 +82,9 @@ create table if not exists activation_codes (
 );
 
 alter table activation_codes enable row level security;
+drop policy if exists "public read activation_codes" on activation_codes;
+drop policy if exists "public insert activation_codes" on activation_codes;
+drop policy if exists "public update activation_codes" on activation_codes;
 create policy "public read activation_codes" on activation_codes for select using (true);
 create policy "public insert activation_codes" on activation_codes for insert with check (true);
 create policy "public update activation_codes" on activation_codes for update using (true);
@@ -89,6 +102,9 @@ create table if not exists analyses (
 );
 
 alter table analyses enable row level security;
+drop policy if exists "public read analyses" on analyses;
+drop policy if exists "public insert analyses" on analyses;
+drop policy if exists "public update analyses" on analyses;
 create policy "public read analyses" on analyses for select using (true);
 create policy "public insert analyses" on analyses for insert with check (true);
 create policy "public update analyses" on analyses for update using (true);

@@ -28,6 +28,9 @@ async function autoVerifyScreenshot(base64: string, paket: string): Promise<{ ok
     try {
       const buffer = Buffer.from(base64, "base64");
       if (buffer.length < 100) return { ok: false, reason: "Gambar terlalu kecil atau tidak valid." };
+      const header = buffer.slice(0, 8).toString("hex");
+      const isValidImage = header.startsWith("89504e47") || header.startsWith("ffd8") || header.startsWith("52494646");
+      if (!isValidImage) return { ok: false, reason: "Format gambar tidak valid. Hanya PNG, JPG, atau WebP." };
 
       // 1) Cek duplikat screenshot (hash vs semua transaksi existing)
       const hash = screenshotHash(base64);

@@ -3,6 +3,10 @@ import { createHash } from "crypto";
 
 const TMP_PATH = "/tmp/transactions.json";
 const NOMINAL_MAP: Record<string, number> = { BASIC: 75000, PRO: 100000, TRIAL: 10000 };
+const BANK_NAMES = /(BCA|BNI|MANDIRI|BRI|CIMB|NIAGA|DANAMON|PERMATA|MAYBANK|OCBC|BTN|PANIN|BUKOPIN|JAGO|JENIUS|DIGITAL|BSI|MUAMALAT|SYARIAH|MEGA|BTPN|NOBU|ARTHA|BISNIS|MASPION|HANA|COMMONWEALTH|BANK\s*(\w+))/i;
+const DATE_PATTERNS = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})|(\d{1,2}\s+(Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agu|Sep|Okt|Nov|Des|Januari|Februari|Maret|April|Juni|Juli|Agustus|September|Oktober|November|Desember)\s+\d{2,4})/i;
+const SUCCESS_KEYWORDS = /(BERHASIL|SUKSES|TRANSFER|TERIMA|DITERIMA|SELESAI|BAYAR|DIBEBANKAN|DEBIT|BIAYA|TRANSAKSI|MUTASI|KREDIT|SETORAN|MASUK)/i;
+const FAIL_KEYWORDS = /(GAGAL|DITOLAK|PENDING|BATAL|GAGAL|TERSANDING|MENUNGGU|PROSES|DIPROSES|CADANGAN|TERTUNDA)/i;
 
 let memTransactions: any[] | null = null;
 
@@ -10,6 +14,10 @@ function generateActivationCode(paket: string) {
   const chars = "0123456789";
   const genPart = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
   return `JCV-${paket}-${genPart()}-${genPart()}`;
+}
+
+function screenshotHash(base64: string): string {
+  return createHash("sha256").update(base64).digest("hex");
 }
 
 async function autoVerifyScreenshot(base64: string, paket: string): Promise<{ ok: boolean; reason?: string }> {
@@ -21,27 +29,87 @@ async function autoVerifyScreenshot(base64: string, paket: string): Promise<{ ok
       const buffer = Buffer.from(base64, "base64");
       if (buffer.length < 100) return { ok: false, reason: "Gambar terlalu kecil atau tidak valid." };
 
+      // 1) Cek duplikat screenshot (hash vs semua transaksi existing)
+      const hash = screenshotHash(base64);
+      const allTx = await readAllTransactions();
+      for (const t of allTx) {
+        if ((t.screenshotHash && t.screenshotHash === hash) || (t.screenshotBase64 && screenshotHash(t.screenshotBase64) === hash)) {
+          return { ok: false, reason: "Bukti bayar duplikat — gambar ini sudah dipakai untuk order sebelumnya." };
+        }
+      }
+
       const mod = await import("tesseract.js");
       const worker = await mod.createWorker("ind+eng");
       const { data } = await worker.recognize(buffer);
       await worker.terminate();
 
       const ocrText = data.text || "";
+      const ocrConfidence = data.confidence || 0;
 
+      // 2) Cek kualitas OCR — jika confidence rendah (buram)
+      if (ocrConfidence < 30 && ocrText.length < 20) {
+        return { ok: false, reason: "Bukti bayar buram/tidak terbaca — silakan unggah ulang dengan gambar yang lebih jelas." };
+      }
+
+      // 3) Deteksi QRIS
       if (/QRIS|qris|PEMBAYARAN\s*QRIS/i.test(ocrText)) {
         return { ok: false, reason: "Gambar adalah kode QRIS, bukan bukti transfer sukses." };
       }
 
-      const expected = NOMINAL_MAP[paket] || 75000;
-      const matches = [...ocrText.matchAll(/Rp\s*([0-9.,]+)/gi)];
-      for (const m of matches) {
-        const raw = m[1].replace(/\./g, "").replace(/,/g, "");
-        const amount = parseInt(raw, 10);
-        if (!isNaN(amount) && amount >= expected) return { ok: true };
+      // 4) Cek status transfer — cari keyword gagal/pending dulu
+      const hasFailWord = FAIL_KEYWORDS.test(ocrText);
+      const hasSuccessWord = SUCCESS_KEYWORDS.test(ocrText);
+      if (hasFailWord && !hasSuccessWord) {
+        return { ok: false, reason: "Status transfer pending/gagal — bukti menunjukkan transaksi belum berhasil." };
       }
 
-      const detected = matches.map(m => m[0]).join(", ") || "tidak terdeteksi";
-      return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak ditemukan. Terdeteksi: ${detected}` };
+      // 5) Ekstrak nominal — harus TEPAT (===), bukan >=
+      const expected = NOMINAL_MAP[paket] || 0;
+      const nominalMatches = [...ocrText.matchAll(/Rp\s*([0-9.,]+)/gi)];
+      let foundExact = false;
+      let allDetectedNominals: string[] = [];
+
+      for (const m of nominalMatches) {
+        const raw = m[1].replace(/\./g, "").replace(/,/g, "");
+        const amount = parseInt(raw, 10);
+        if (!isNaN(amount)) {
+          allDetectedNominals.push(m[0]);
+          if (amount === expected) foundExact = true;
+        }
+      }
+
+      if (!foundExact) {
+        if (allDetectedNominals.length > 0) {
+          // Cek apakah nominal kurang atau lebih
+          for (const m of nominalMatches) {
+            const raw = m[1].replace(/\./g, "").replace(/,/g, "");
+            const amount = parseInt(raw, 10);
+            if (!isNaN(amount)) {
+              if (amount < expected) {
+                return { ok: false, reason: `Nominal kurang — dibayar ${m[0]} tapi pesan ${paket} (Rp ${expected.toLocaleString("id-ID")}).` };
+              }
+              if (amount > expected) {
+                return { ok: false, reason: `Nominal lebih — dibayar ${m[0]} tapi pesan ${paket} (Rp ${expected.toLocaleString("id-ID")}). Indikasi salah transfer.` };
+              }
+            }
+          }
+          // Format tidak familiar
+          return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak ditemukan. Terdeteksi: ${allDetectedNominals.join(", ")}.` };
+        }
+        return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak terbaca. Pastikan bukti transfer jelas.` };
+      }
+
+      // 6) Validasi tanggal terlihat (rekomendasi, bukan wajib)
+      const hasDate = DATE_PATTERNS.test(ocrText);
+      const hasBankName = BANK_NAMES.test(ocrText);
+
+      // 7) Validasi keyword berhasil — jika tidak ada kata berhasil sama sekali, peringatkan
+      if (!hasSuccessWord && !hasFailWord) {
+        // Tidak ada keyword sukses atau gagal yang jelas — izinkan lewat dengan catatan
+      }
+
+      // Simpan hash untuk deteksi duplikat
+      return { ok: true, ocrConfidence, ocrText: ocrText.substring(0, 200), hasDate, hasBankName, screenshotHash: hash };
     } catch (e: any) {
       return { ok: false, reason: `OCR error: ${e.message}` };
     }
@@ -123,6 +191,7 @@ async function readAllTransactions(): Promise<any[]> {
           hasScreenshot: t.has_screenshot,
           screenshotBase64: t.screenshot_base64,
           screenshotMimeType: t.screenshot_mime_type,
+          screenshotHash: t.screenshot_hash,
           codePlainForDb: t.code_plain_for_db,
           verified_at: t.verified_at,
         }));
@@ -146,6 +215,7 @@ async function saveTransactionToAll(tx: any, screenshotBase64?: string, screensh
         has_screenshot: !!screenshotBase64,
         screenshot_base64: screenshotBase64 || null,
         screenshot_mime_type: screenshotMimeType || null,
+        screenshot_hash: tx.screenshotHash || null,
         code_plain_for_db: tx.codePlainForDb || null,
         verified_at: tx.verified_at || null,
         ai_reason: tx.ai_reason || null,
@@ -259,6 +329,7 @@ export default async function handler(req: any, res: any) {
         hasScreenshot: !!screenshotBase64,
         screenshotBase64: screenshotBase64 || null,
         screenshotMimeType: screenshotMimeType || null,
+        screenshotHash: screenshotBase64 ? screenshotHash(screenshotBase64) : null,
         codePlainForDb,
         verified_at,
         ai_reason,

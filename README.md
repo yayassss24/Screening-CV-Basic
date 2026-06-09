@@ -66,6 +66,8 @@ Platform screening CV otomatis dengan sistem pembayaran terintegrasi. Mendukung 
 | `OCR_SERVICE_URL` | Railway OCR service URL |
 | `GEMINI_API_KEY` | (opsional) Gemini AI fallback |
 | `GEMINI_API_KEY_PAYMENT` | (opsional) Gemini AI fallback |
+| `WA_API_KEY` | (opsional) Token API Fonnte untuk WA notifikasi |
+| `ADMIN_WA` | (opsional) Nomor WA admin (format 628xxx) |
 
 ### Railway (OCR Service)
 - Deploy dari folder `ocr-service/`

@@ -2,8 +2,46 @@ import { readFileSync, existsSync, writeFileSync } from "fs";
 import { createHash } from "crypto";
 
 const TMP_PATH = "/tmp/transactions.json";
+const NOMINAL_MAP: Record<string, number> = { BASIC: 75000, PRO: 100000, TRIAL: 10000 };
 
 let memTransactions: any[] | null = null;
+
+function generateActivationCode(paket: string) {
+  const chars = "0123456789";
+  const genPart = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+  return `JCV-${paket}-${genPart()}-${genPart()}`;
+}
+
+async function autoVerifyScreenshot(base64: string, paket: string): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const buffer = Buffer.from(base64, "base64");
+    if (buffer.length < 100) return { ok: false, reason: "Gambar terlalu kecil atau tidak valid." };
+
+    const mod = await import("tesseract.js");
+    const worker = await mod.createWorker("ind+eng");
+    const { data } = await worker.recognize(buffer);
+    await worker.terminate();
+
+    const ocrText = data.text || "";
+
+    if (/QRIS|qris|PEMBAYARAN\s*QRIS/i.test(ocrText)) {
+      return { ok: false, reason: "Gambar adalah kode QRIS, bukan bukti transfer sukses." };
+    }
+
+    const expected = NOMINAL_MAP[paket] || 75000;
+    const matches = [...ocrText.matchAll(/Rp\s*([0-9.,]+)/gi)];
+    for (const m of matches) {
+      const raw = m[1].replace(/\./g, "").replace(/,/g, "");
+      const amount = parseInt(raw, 10);
+      if (!isNaN(amount) && amount >= expected) return { ok: true };
+    }
+
+    const detected = matches.map(m => m[0]).join(", ") || "tidak terdeteksi";
+    return { ok: false, reason: `Nominal Rp ${expected.toLocaleString("id-ID")} tidak ditemukan. Terdeteksi: ${detected}` };
+  } catch (e: any) {
+    return { ok: false, reason: `OCR error: ${e.message}` };
+  }
+}
 
 function loadFileTransactions(): any[] {
   if (!existsSync(TMP_PATH)) return [];
@@ -102,6 +140,7 @@ async function saveTransactionToAll(tx: any, screenshotBase64?: string, screensh
         screenshot_mime_type: screenshotMimeType || null,
         code_plain_for_db: tx.codePlainForDb || null,
         verified_at: tx.verified_at || null,
+        ai_reason: tx.ai_reason || null,
       } as any);
     } catch {}
   }
@@ -175,8 +214,29 @@ export default async function handler(req: any, res: any) {
       }
 
       const transactionId = `TX-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
-      const nominal = paket === "PRO" ? 100000 : paket === "TRIAL" ? 10000 : 75000;
-      const status = source === "cs_chatbot" ? "PENDING VERIFIKASI MANUAL" : "PENDING";
+      const nominal = NOMINAL_MAP[paket] || 75000;
+
+      // Auto-verify with OCR if screenshot provided
+      let status: string;
+      let codePlainForDb: string | null = null;
+      let verified_at: string | null = null;
+      let ai_reason: string | null = null;
+
+      if (source === "cs_chatbot" && screenshotBase64) {
+        const result = await autoVerifyScreenshot(screenshotBase64, paket);
+        if (result.ok) {
+          status = "PAID";
+          codePlainForDb = generateActivationCode(paket);
+          verified_at = new Date().toISOString();
+        } else if (result.reason && result.reason.startsWith("OCR error")) {
+          status = "PENDING VERIFIKASI MANUAL";
+        } else {
+          status = "FAILED";
+          ai_reason = result.reason || null;
+        }
+      } else {
+        status = source === "cs_chatbot" ? "PENDING VERIFIKASI MANUAL" : "PENDING";
+      }
 
       const tx = {
         id: transactionId,
@@ -190,12 +250,18 @@ export default async function handler(req: any, res: any) {
         hasScreenshot: !!screenshotBase64,
         screenshotBase64: screenshotBase64 || null,
         screenshotMimeType: screenshotMimeType || null,
+        codePlainForDb,
+        verified_at,
+        ai_reason,
       };
 
       const savedTo = await saveTransactionToAll(tx, screenshotBase64, screenshotMimeType);
 
       res.setHeader("Content-Type", "application/json");
-      res.status(200).end(JSON.stringify({ success: true, transactionId, paket, nominal, status, savedTo }));
+      res.status(200).end(JSON.stringify({
+        success: true, transactionId, paket, nominal, status,
+        codePlainForDb, ai_reason, savedTo,
+      }));
       return;
     }
 

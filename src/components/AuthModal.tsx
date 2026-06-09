@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { X, User, Lock, LogIn, UserPlus } from "lucide-react";
-import { loginWithUsername, registerWithUsername, loginWithGoogle } from "../firebase";
+import { loginWithUsername, registerWithUsername, loginWithGoogle, getGoogleRedirectResult } from "../firebase";
 
 interface AuthModalProps {
   onClose: () => void;
@@ -55,22 +55,30 @@ export default function AuthModal({ onClose, onError }: AuthModalProps) {
     }
   };
 
+  // Check for redirect result on mount (user coming back from Google)
+  useEffect(() => {
+    getGoogleRedirectResult().then((result) => {
+      if (result) {
+        onClose();
+      }
+    }).catch((err: any) => {
+      const fbCode = err.code || "";
+      if (fbCode === "auth/operation-not-allowed") {
+        onError("Login Google belum diaktifkan. Hubungi admin.");
+      } else if (fbCode !== "auth/no-auth-event") {
+        onError(err.message || "Gagal login dengan Google");
+      }
+    });
+  }, []);
+
   const handleGoogleSignIn = async () => {
     setLoading(true);
     try {
       await loginWithGoogle();
-      onClose();
+      // Page will redirect to Google — no need to await or close modal
     } catch (err: any) {
-      const fbCode = err.code || "";
-      if (fbCode === "auth/popup-closed-by-user") {
-        // user cancelled, no error needed
-      } else if (fbCode === "auth/operation-not-allowed") {
-        onError("Login Google belum diaktifkan. Hubungi admin.");
-      } else {
-        onError(err.message || "Gagal login dengan Google");
-      }
-    } finally {
       setLoading(false);
+      onError(err.message || "Gagal mengarahkan ke halaman login Google");
     }
   };
 

@@ -33,7 +33,7 @@ import {
   doc, 
   setDoc,
 } from "firebase/firestore";
-import { auth, logOut, db } from "./firebase";
+import { auth, logOut, db, getGoogleRedirectResult } from "./firebase";
 import { JagoCVAnalysisResult, UserProfile, SavedAnalysis } from "./types";
 import UserAccountHeader from "./components/UserAccountHeader";
 import FileUploaderDropzone from "./components/FileUploaderDropzone";
@@ -671,7 +671,20 @@ Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi 
     return () => unsubscribe();
   }, []);
 
-
+  // Handle Google redirect sign-in result (close auth modal)
+  useEffect(() => {
+    getGoogleRedirectResult().then((result) => {
+      if (result) {
+        setShowAuthModal(false);
+      }
+    }).catch((err: any) => {
+      const code = err.code || "";
+      if (code !== "auth/no-auth-event") {
+        console.error("Redirect sign-in error:", err.message);
+        setErrorMsg(err.message || "Gagal login dengan Google");
+      }
+    });
+  }, []);
 
   // Persist activeResult to localStorage for guest users
   useEffect(() => {

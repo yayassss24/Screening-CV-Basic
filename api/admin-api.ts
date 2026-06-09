@@ -244,7 +244,7 @@ export default async function handler(req: any, res: any) {
           ai_reason = result.reason || null;
         }
       } else {
-        status = source === "cs_chatbot" ? "PENDING VERIFIKASI MANUAL" : "PENDING";
+        status = "PENDING VERIFIKASI MANUAL";
       }
 
       const tx = {

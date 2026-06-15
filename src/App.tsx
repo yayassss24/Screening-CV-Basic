@@ -1924,7 +1924,7 @@ Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi 
                 </div>
                       <FileUploaderDropzone
                   label="Unggah Dokumen CV / Resume"
-                  allowedExtensions={[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg"]}
+                  allowedExtensions={[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp"]}
                   onTextExtracted={(text, filename) => {
                     if (text) {
                       setCvText(text);
@@ -1953,7 +1953,7 @@ Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi 
 
                 <FileUploaderDropzone
                   label="Unggah Dokumen Informasi Lowongan"
-                  allowedExtensions={[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg"]}
+                  allowedExtensions={[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp"]}
                   onTextExtracted={(text) => {
                     setJobDescription(text || "");
                   }}
@@ -1978,7 +1978,7 @@ Proses verifikasi biasanya memakan waktu 1-2 jam. Anda akan mendapat notifikasi 
                   <div className="p-3 border-t border-slate-200 flex flex-col gap-2">
                     <FileUploaderDropzone
                       label="Unggah Dokumen Cover Letter"
-                      allowedExtensions={[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg"]}
+                      allowedExtensions={[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp"]}
                       onTextExtracted={(text) => {
                         setCoverLetter(text || "");
                       }}

@@ -8,6 +8,38 @@ interface FileUploaderDropzoneProps {
   onError: (errors: string) => void;
 }
 
+function toBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      resolve(result.split(",")[1]);
+    };
+    reader.onerror = () => reject(new Error("Gagal membaca file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function extractViaServer(file: File): Promise<string> {
+  const base64 = await toBase64(file);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  const res = await fetch("/api/extract-text", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fileBase64: base64, mimeType: file.type }),
+    signal: controller.signal,
+  });
+  clearTimeout(timeoutId);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `Server error: ${res.status}`);
+  }
+  const data = await res.json();
+  if (!data.success) throw new Error(data.error || "Gagal ekstraksi");
+  return data.text;
+}
+
 async function extractDocxText(file: File): Promise<string> {
   const JSZip = (await import("jszip")).default;
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
@@ -21,28 +53,6 @@ async function extractDocxText(file: File): Promise<string> {
     texts.push(match[1]);
   }
   return texts.join(" ").replace(/\s+/g, " ").trim();
-}
-
-async function extractPdfText(file: File): Promise<string> {
-  const { getDocument, GlobalWorkerOptions } = await import("pdfjs-dist");
-  GlobalWorkerOptions.workerSrc =
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.9.155/pdf.worker.min.mjs";
-  const doc = await getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
-  let fullText = "";
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i);
-    const content = await page.getTextContent();
-    fullText += content.items.map((item: any) => item.str).join(" ") + "\n";
-  }
-  return fullText.trim();
-}
-
-async function extractImageText(file: File): Promise<string> {
-  const { createWorker } = await import("tesseract.js");
-  const worker = await createWorker("ind+eng");
-  const { data } = await worker.recognize(file);
-  await worker.terminate();
-  return data.text || "";
 }
 
 export default function FileUploaderDropzone({
@@ -80,9 +90,9 @@ export default function FileUploaderDropzone({
       } else if (extension === ".docx") {
         text = await extractDocxText(file);
       } else if (extension === ".pdf") {
-        text = await extractPdfText(file);
-      } else if ([".png", ".jpg", ".jpeg"].includes(extension)) {
-        text = await extractImageText(file);
+        text = await extractViaServer(file);
+      } else if ([".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp"].includes(extension)) {
+        text = await extractViaServer(file);
       } else {
         throw new Error("Tipe berkas tidak didukung");
       }
